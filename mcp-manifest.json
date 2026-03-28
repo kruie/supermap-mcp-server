@@ -1,0 +1,55 @@
+{
+  "name": "supermap-mcp-server",
+  "version": "1.0.0",
+  "description": "SuperMap iDesktopX MCP Server - 50+ GIS automation tools based on iObjectsPy",
+  "author": "kruie",
+  "license": "MIT",
+  "type": "mcp-server",
+  "runtime": {
+    "type": "python",
+    "version": ">=3.10.0",
+    "entry": "supermap_mcp_server.py"
+  },
+  "dependencies": [
+    {
+      "name": "iObjectsPy",
+      "version": ">=11.1.0",
+      "system": true
+    },
+    {
+      "name": "numpy",
+      "version": ">=1.24.0",
+      "pip": true
+    },
+    {
+      "name": "pandas",
+      "version": ">=2.0.0",
+      "pip": true
+    }
+  ],
+  "environment": {
+    "SUPERMAP_LICENSE": {
+      "description": "Path to SuperMap license file",
+      "required": true
+    },
+    "SUPERMAP_HOME": {
+      "description": "Path to iObjectsPy installation directory",
+      "required": false
+    }
+  },
+  "tools": {
+    "categories": [
+      "Data Management",
+      "Data Import/Export",
+      "Spatial Analysis",
+      "Spatial Query",
+      "Data Quality Check",
+      "Map Cartography",
+      "3D Analysis"
+    ],
+    "count": 50
+  },
+  "skills": [
+    "supermap-idesktop-skill"
+  ]
+}
