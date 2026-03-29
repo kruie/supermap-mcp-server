@@ -5,7 +5,7 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 55/55 (全部完成)
+工具数量: 57/57 (全部完成)
 """
 
 import sys
@@ -271,6 +271,34 @@ async def list_tools():
                     "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
                 },
                 "required": ["osm_path", "datasource_path"]
+            }
+        ),
+        # ---- 批量导入导出 ----
+        Tool(
+            name="batch_import",
+            description="批量导入多个文件到数据源，支持 Shapefile/GeoJSON/CSV/KML/DWG 等格式混合导入",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_paths": {"type": "array", "items": {"type": "string"}, "description": "源文件路径列表，如 [\"D:/data/roads.shp\", \"D:/data/pois.geojson\"]"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_names": {"type": "array", "items": {"type": "string"}, "description": "导入后的数据集名称列表（可选，默认使用文件名）"}
+                },
+                "required": ["file_paths", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="batch_export",
+            description="批量导出数据源中的多个数据集为指定格式（Shapefile/GeoJSON/KML）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "源 .udbx 文件路径"},
+                    "dataset_names": {"type": "array", "items": {"type": "string"}, "description": "要导出的数据集名称列表"},
+                    "output_format": {"type": "string", "enum": ["shapefile", "geojson", "kml"], "description": "导出格式（默认: shapefile）"},
+                    "output_directory": {"type": "string", "description": "输出目录路径"}
+                },
+                "required": ["datasource_path", "dataset_names", "output_directory"]
             }
         ),
         # ---- 数据导出 ----
@@ -1172,6 +1200,166 @@ async def call_tool(name: str, arguments: dict):
                     "traceback": traceback.format_exc()
                 }, indent=2))]
         
+        # 批量导入
+        elif name == "batch_import":
+            try:
+                import os
+                file_paths = arguments["file_paths"]
+                if isinstance(file_paths, str):
+                    file_paths = json.loads(file_paths)
+                datasource_path = arguments["datasource_path"]
+                dataset_names = arguments.get("dataset_names", None)
+                if isinstance(dataset_names, str):
+                    dataset_names = json.loads(dataset_names)
+                
+                results = []
+                success_count = 0
+                fail_count = 0
+                
+                for i, fpath in enumerate(file_paths):
+                    ext = os.path.splitext(fpath)[1].lower()
+                    ds_name = dataset_names[i] if dataset_names and i < len(dataset_names) else os.path.splitext(os.path.basename(fpath))[0]
+                    
+                    try:
+                        if ext == ".shp":
+                            result = conv.import_shape(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif ext == ".geojson" or ext == ".json":
+                            result = conv.import_geojson(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif ext == ".csv":
+                            result = conv.import_csv(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif ext in (".kml", ".kmz"):
+                            result = conv.import_kml(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif ext in (".dwg", ".dxf"):
+                            result = conv.import_cad(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif ext == ".tiff" or ext == ".tif":
+                            result = conv.import_tiff(fpath, datasource_path, out_dataset_name=ds_name)
+                            results.append({"file": fpath, "dataset": ds_name, "status": "success", "result": str(result)})
+                            success_count += 1
+                        else:
+                            results.append({"file": fpath, "dataset": ds_name, "status": "skipped", "reason": f"不支持的格式: {ext}"})
+                            fail_count += 1
+                    except Exception as e:
+                        results.append({"file": fpath, "dataset": ds_name, "status": "error", "error": str(e)})
+                        fail_count += 1
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "completed",
+                    "total": len(file_paths),
+                    "success": success_count,
+                    "failed": fail_count,
+                    "details": results
+                }, indent=2, ensure_ascii=False, default=str))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"批量导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 批量导出
+        elif name == "batch_export":
+            try:
+                import os
+                datasource_path = arguments["datasource_path"]
+                dataset_names = arguments["dataset_names"]
+                if isinstance(dataset_names, str):
+                    dataset_names = json.loads(dataset_names)
+                output_format = arguments.get("output_format", "shapefile").lower()
+                output_dir = arguments["output_directory"]
+                
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                
+                results = []
+                success_count = 0
+                fail_count = 0
+                
+                for ds_name in dataset_names:
+                    try:
+                        if output_format == "shapefile":
+                            out_path = os.path.join(output_dir, f"{ds_name}.shp")
+                            result = conv.export_shapefile(datasource_path, ds_name, out_path)
+                            results.append({"dataset": ds_name, "output": out_path, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif output_format == "geojson":
+                            out_path = os.path.join(output_dir, f"{ds_name}.geojson")
+                            result = conv.export_geojson(datasource_path, ds_name, out_path)
+                            results.append({"dataset": ds_name, "output": out_path, "status": "success", "result": str(result)})
+                            success_count += 1
+                        elif output_format == "kml":
+                            out_path = os.path.join(output_dir, f"{ds_name}.kml")
+                            # 使用 GeoJSON 中转方式导出 KML
+                            import tempfile
+                            tmp_geojson = os.path.join(tempfile.gettempdir(), f"{ds_name}_tmp.geojson")
+                            conv.export_geojson(datasource_path, ds_name, tmp_geojson, encode_to_epsg4326=True)
+                            # 简单 GeoJSON 到 KML 转换
+                            with open(tmp_geojson, 'r', encoding='utf-8') as f:
+                                gj_data = json.load(f)
+                            kml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n'
+                            features = gj_data.get("features", []) if isinstance(gj_data, dict) else []
+                            for feat in features:
+                                geom = feat.get("geometry", {})
+                                props = feat.get("properties", {})
+                                name = props.get("name", ds_name)
+                                kml_content += f'  <Placemark><name>{name}</name>\n'
+                                if geom.get("type") == "Point":
+                                    coords = geom["coordinates"]
+                                    kml_content += f'    <Point><coordinates>{coords[0]},{coords[1]}</coordinates></Point>\n'
+                                elif geom.get("type") in ("LineString", "MultiLineString"):
+                                    coords = geom["coordinates"]
+                                    if geom["type"] == "LineString":
+                                        coords = [coords]
+                                    for line in coords:
+                                        coord_str = " ".join([f"{c[0]},{c[1]}" for c in line])
+                                        kml_content += f'    <LineString><coordinates>{coord_str}</coordinates></LineString>\n'
+                                elif geom.get("type") in ("Polygon", "MultiPolygon"):
+                                    coords = geom["coordinates"]
+                                    if geom["type"] == "Polygon":
+                                        coords = [coords]
+                                    for poly in coords:
+                                        for ring in poly:
+                                            coord_str = " ".join([f"{c[0]},{c[1]}" for c in ring])
+                                            kml_content += f'    <Polygon><outerBoundaryIs><LinearRing><coordinates>{coord_str}</coordinates></LinearRing></outerBoundaryIs></Polygon>\n'
+                                kml_content += '  </Placemark>\n'
+                            kml_content += '</Document>\n</kml>'
+                            with open(out_path, 'w', encoding='utf-8') as f:
+                                f.write(kml_content)
+                            os.remove(tmp_geojson)
+                            results.append({"dataset": ds_name, "output": out_path, "status": "success"})
+                            success_count += 1
+                        else:
+                            results.append({"dataset": ds_name, "status": "skipped", "reason": f"不支持的格式: {output_format}"})
+                            fail_count += 1
+                    except Exception as e:
+                        results.append({"dataset": ds_name, "status": "error", "error": str(e)})
+                        fail_count += 1
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "completed",
+                    "total": len(dataset_names),
+                    "success": success_count,
+                    "failed": fail_count,
+                    "format": output_format,
+                    "output_directory": output_dir,
+                    "details": results
+                }, indent=2, ensure_ascii=False, default=str))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"批量导出失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
         # 导出 Shapefile
         elif name == "export_shapefile":
             result = conv.export_shapefile(arguments["datasource_path"], arguments["dataset_name"], arguments["output_path"])
@@ -1811,7 +1999,7 @@ async def _check_mcp_health():
         "iobjectspy_importable": False,
         "java_path_valid": False,
         "connection_ok": False,
-        "tool_count": 55,
+        "tool_count": 57,
         "initialized": _initialized
     }
     
