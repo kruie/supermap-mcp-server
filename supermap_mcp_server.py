@@ -9,6 +9,7 @@ SuperMap iObjectsPy MCP Server
 """
 
 import sys
+import os
 import json
 import traceback
 from mcp.server import Server
@@ -21,6 +22,14 @@ sys.path.insert(0, IOBJECTSPY_PATH)
 
 # 默认 Java 路径
 DEFAULT_IOBJECT_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
+
+# 默认 License 路径（SuperMap 标准安装位置）
+# SuperMap 通过环境变量 SUPERMAP_LICENSE 指定 License 文件目录
+# 默认路径: C:\Program Files\Common Files\SuperMap\License
+DEFAULT_LICENSE_PATH = os.environ.get(
+    "SUPERMAP_LICENSE",
+    r"C:\Program Files\Common Files\SuperMap\License"
+)
 
 # 全局状态
 _server = Server("supermap-iobjectspy")
@@ -57,7 +66,7 @@ async def list_tools():
         # ---- 初始化与环境 ----
         Tool(
             name="initialize_supermap",
-            description="初始化 SuperMap iObjectsPy 连接，设置 Java 环境",
+            description="初始化 SuperMap iObjectsPy 连接，设置 Java 环境和 License 路径",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -1020,10 +1029,17 @@ async def call_tool(name: str, arguments: dict):
         elif name == "get_environment_info":
             java_path = iobs.env.get_iobjects_java_path()
             omp_threads = iobs.env.get_omp_num_threads()
+            # 检测 License 文件
+            license_info = {"path": DEFAULT_LICENSE_PATH, "exists": os.path.isdir(DEFAULT_LICENSE_PATH)}
+            if license_info["exists"]:
+                lic_files = [f for f in os.listdir(DEFAULT_LICENSE_PATH) if f.endswith(('.lic', '.licx', '.lic12', '.udlx'))]
+                license_info["files"] = lic_files
+                license_info["file_count"] = len(lic_files)
             info = {
                 "status": "success",
                 "iobjects_java_path": java_path,
                 "omp_threads": omp_threads,
+                "license": license_info,
                 "server": "SuperMap iObjectsPy MCP Server"
             }
             return [TextContent(type="text", text=json.dumps(info, indent=2))]
@@ -1652,9 +1668,62 @@ async def call_tool(name: str, arguments: dict):
         
         # 导入 GDB
         elif name == "import_gdb":
-            feature_class = arguments.get("feature_class", "")
-            result = conv.import_filegdb(arguments["gdb_path"], arguments["datasource_path"], feature_class)
-            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+            import iobjectspy as spy
+            from iobjectspy import DatasourceConnectionInfo, EngineType
+            
+            gdb_path = arguments["gdb_path"]
+            datasource_path = arguments["datasource_path"]
+            feature_class = arguments.get("feature_class", None)
+            
+            try:
+                # 打开目标数据源
+                target_conn = DatasourceConnectionInfo()
+                target_conn.server = datasource_path
+                target_conn.engine_type = EngineType.UDBX
+                target_ds = spy.open_datasource(target_conn)
+                
+                if not target_ds:
+                    raise Exception(f"无法打开目标数据源: {datasource_path}")
+                
+                # 打开源GDB
+                src_conn = DatasourceConnectionInfo()
+                src_conn.server = gdb_path
+                src_conn.engine_type = EngineType.FILEGDB
+                src_ds = spy.open_datasource(src_conn)
+                
+                if not src_ds:
+                    raise Exception(f"无法打开GDB: {gdb_path}")
+                
+                imported_datasets = []
+                
+                # 获取所有数据集
+                datasets = src_ds.get_datasets()
+                for dataset in datasets:
+                    dataset_name = dataset.name
+                    
+                    # 如果指定了特定要素类，只导入该要素类
+                    if feature_class and dataset_name != feature_class:
+                        continue
+                    
+                    # 复制到目标数据源
+                    new_dataset = dataset.copy_to(target_ds, dataset_name)
+                    imported_datasets.append(dataset_name)
+                
+                src_ds.close()
+                target_ds.close()
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "imported_datasets": imported_datasets,
+                    "count": len(imported_datasets)
+                }, indent=2))]
+                
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"GDB导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
         
         # 导入 CSV
         elif name == "import_csv":
@@ -2764,9 +2833,26 @@ async def _check_mcp_health():
         "iobjectspy_importable": False,
         "java_path_valid": False,
         "connection_ok": False,
+        "license_valid": False,
         "tool_count": 68,
         "initialized": _initialized
     }
+    
+    # 检查 License 文件
+    license_info = {"path": DEFAULT_LICENSE_PATH}
+    if os.path.isdir(DEFAULT_LICENSE_PATH):
+        lic_files = [f for f in os.listdir(DEFAULT_LICENSE_PATH) if f.endswith(('.lic', '.licx', '.lic12', '.udlx'))]
+        if lic_files:
+            checks["license_valid"] = True
+            license_info["exists"] = True
+            license_info["files"] = lic_files
+        else:
+            license_info["exists"] = True
+            license_info["error"] = "License 目录存在但未找到 License 文件（.lic/.licx/.lic12/.udlx）"
+    else:
+        license_info["exists"] = False
+        license_info["error"] = f"License 目录不存在: {DEFAULT_LICENSE_PATH}，请通过环境变量 SUPERMAP_LICENSE 指定正确路径"
+    checks["license"] = license_info
     
     # 检查 iObjectsPy 是否可导入
     try:
@@ -2800,7 +2886,7 @@ async def _check_mcp_health():
     elif _init_error:
         checks["connection_error"] = _init_error
     
-    checks["overall_status"] = "healthy" if all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["connection_ok"]]) else "degraded"
+    checks["overall_status"] = "healthy" if all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["connection_ok"], checks["license_valid"]]) else "degraded"
     
     return [TextContent(type="text", text=json.dumps(checks, indent=2, ensure_ascii=False))]
 
