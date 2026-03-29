@@ -17,11 +17,21 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 # 设置 iObjectsPy 路径
-IOBJECTSPY_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin_python\iobjectspy\iobjectspy-py310_64"
+# 注意: iObjectsPy 必须使用反斜杠路径（Windows 原生路径格式）
+# 可通过环境变量 SUPERMAP_IOBJECTSPY_PATH 覆盖默认路径
+IOBJECTSPY_PATH = os.environ.get(
+    "SUPERMAP_IOBJECTSPY_PATH",
+    r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin_python\iobjectspy\iobjectspy-py310_64"
+)
+# 确保路径使用反斜杠（iObjectsPy 要求 Windows 反斜杠路径）
+IOBJECTSPY_PATH = IOBJECTSPY_PATH.replace("/", "\\")
 sys.path.insert(0, IOBJECTSPY_PATH)
 
-# 默认 Java 路径
-DEFAULT_IOBJECT_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
+# 默认 Java 路径（iObjectsPy 要求 Windows 反斜杠路径）
+DEFAULT_IOBJECT_PATH = os.environ.get(
+    "SUPERMAP_JAVA_PATH",
+    r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
+).replace("/", "\\")
 
 # 默认 License 路径（SuperMap 标准安装位置）
 # SuperMap 通过环境变量 SUPERMAP_LICENSE 指定 License 文件目录
@@ -29,7 +39,7 @@ DEFAULT_IOBJECT_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin
 DEFAULT_LICENSE_PATH = os.environ.get(
     "SUPERMAP_LICENSE",
     r"C:\Program Files\Common Files\SuperMap\License"
-)
+).replace("/", "\\")
 
 # 全局状态
 _server = Server("supermap-iobjectspy")
@@ -74,7 +84,7 @@ async def list_tools():
         ),
         Tool(
             name="get_environment_info",
-            description="获取 SuperMap 环境信息，包括 Java 路径、OMP 线程数",
+            description="获取 SuperMap 环境信息，包括 iObjectsPy 路径、Java 路径、License 路径、OMP 线程数",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -1037,6 +1047,7 @@ async def call_tool(name: str, arguments: dict):
                 license_info["file_count"] = len(lic_files)
             info = {
                 "status": "success",
+                "iobjectspy_path": IOBJECTSPY_PATH,
                 "iobjects_java_path": java_path,
                 "omp_threads": omp_threads,
                 "license": license_info,
@@ -2855,6 +2866,7 @@ async def _check_mcp_health():
     checks["license"] = license_info
     
     # 检查 iObjectsPy 是否可导入
+    checks["iobjectspy_config_path"] = IOBJECTSPY_PATH
     try:
         import importlib
         spec = importlib.util.find_spec("iobjectspy")
