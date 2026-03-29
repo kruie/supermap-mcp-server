@@ -5,7 +5,7 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 53/53 (全部完成)
+工具数量: 55/55 (全部完成)
 """
 
 import sys
@@ -57,7 +57,7 @@ async def list_tools():
         # ---- 初始化与环境 ----
         Tool(
             name="initialize_supermap",
-            description="Initialize SuperMap iObjectsPy connection",
+            description="初始化 SuperMap iObjectsPy 连接，设置 Java 环境",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -65,7 +65,7 @@ async def list_tools():
         ),
         Tool(
             name="get_environment_info",
-            description="Get SuperMap environment information",
+            description="获取 SuperMap 环境信息，包括 Java 路径、OMP 线程数",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -82,22 +82,22 @@ async def list_tools():
         # ---- 数据源管理 ----
         Tool(
             name="open_udbx_datasource",
-            description="Open a UDBX datasource",
+            description="打开 UDBX 数据源文件，返回数据集列表",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path to .udbx file"}
+                    "file_path": {"type": "string", "description": "UDBX 文件路径"}
                 },
                 "required": ["file_path"]
             }
         ),
         Tool(
             name="create_udbx_datasource",
-            description="Create a new UDBX datasource",
+            description="创建新的 UDBX 数据源文件",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Path for new .udbx file"}
+                    "file_path": {"type": "string", "description": "新建 UDBX 文件路径"}
                 },
                 "required": ["file_path"]
             }
@@ -115,23 +115,51 @@ async def list_tools():
         # ---- 数据集管理 ----
         Tool(
             name="list_datasets",
-            description="List all datasets in a datasource",
+            description="列出数据源中的所有数据集，包括名称、类型和记录数",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Path to .udbx file"}
+                    "datasource_path": {"type": "string", "description": "UDBX 文件路径"}
                 },
                 "required": ["datasource_path"]
             }
         ),
         Tool(
             name="get_dataset_info",
-            description="Get information about a dataset",
+            description="获取数据集详细信息，包括类型、记录数、范围等",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Path to .udbx file"},
-                    "dataset_name": {"type": "string", "description": "Name of the dataset"}
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="query_dataset",
+            description="SQL 属性查询数据集，支持条件过滤、字段选择和数量限制",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "sql_filter": {"type": "string", "description": "SQL WHERE 过滤条件（可选），如 \"population > 10000 AND name LIKE '北京%'\""},
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "要返回的字段列表（可选），如 [\"name\", \"population\"]"},
+                    "max_results": {"type": "integer", "description": "最大返回记录数（默认: 100）"},
+                    "order_by": {"type": "string", "description": "排序字段（可选），如 \"population DESC\""}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="delete_dataset",
+            description="删除数据源中的指定数据集，操作不可逆",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "要删除的数据集名称"}
                 },
                 "required": ["datasource_path", "dataset_name"]
             }
@@ -139,26 +167,26 @@ async def list_tools():
         # ---- 数据导入 ----
         Tool(
             name="import_shapefile",
-            description="Import a Shapefile into a datasource",
+            description="导入 Shapefile 文件到数据源中",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "shapefile_path": {"type": "string", "description": "Path to .shp file"},
-                    "datasource_path": {"type": "string", "description": "Target .udbx file"},
-                    "dataset_name": {"type": "string", "description": "Name for imported dataset"}
+                    "shapefile_path": {"type": "string", "description": "Shapefile (.shp) 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 UDBX 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
                 },
                 "required": ["shapefile_path", "datasource_path"]
             }
         ),
         Tool(
             name="import_gdb",
-            description="Import ESRI GDB (FileGDB) data into a datasource",
+            description="导入 ESRI GDB (FileGDB) 数据到数据源中",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "gdb_path": {"type": "string", "description": "Path to .gdb folder"},
-                    "datasource_path": {"type": "string", "description": "Target .udbx file"},
-                    "feature_class": {"type": "string", "description": "Feature class name in GDB"}
+                    "gdb_path": {"type": "string", "description": "GDB 文件夹路径"},
+                    "datasource_path": {"type": "string", "description": "目标 UDBX 文件路径"},
+                    "feature_class": {"type": "string", "description": "GDB 中的要素类名称"}
                 },
                 "required": ["gdb_path", "datasource_path"]
             }
@@ -248,13 +276,13 @@ async def list_tools():
         # ---- 数据导出 ----
         Tool(
             name="export_shapefile",
-            description="Export a dataset to Shapefile",
+            description="导出数据集为 Shapefile 文件",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Source .udbx file"},
-                    "dataset_name": {"type": "string", "description": "Dataset name"},
-                    "output_path": {"type": "string", "description": "Output .shp file path"}
+                    "datasource_path": {"type": "string", "description": "源 UDBX 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "output_path": {"type": "string", "description": "输出 .shp 文件路径"}
                 },
                 "required": ["datasource_path", "dataset_name", "output_path"]
             }
@@ -346,14 +374,14 @@ async def list_tools():
         # ---- 空间分析 ----
         Tool(
             name="create_buffer",
-            description="Create buffer around features",
+            description="创建缓冲区，为要素生成指定距离的缓冲多边形",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Source .udbx file"},
-                    "input_dataset": {"type": "string", "description": "Input dataset name"},
-                    "output_dataset": {"type": "string", "description": "Output dataset name"},
-                    "buffer_distance": {"type": "number", "description": "Buffer distance in meters"}
+                    "datasource_path": {"type": "string", "description": "UDBX 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "buffer_distance": {"type": "number", "description": "缓冲距离（米）"}
                 },
                 "required": ["datasource_path", "input_dataset", "output_dataset", "buffer_distance"]
             }
@@ -390,27 +418,27 @@ async def list_tools():
         ),
         Tool(
             name="clip_data",
-            description="Clip one dataset by another",
+            description="裁剪分析，用一个数据集裁剪另一个数据集",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Datasource path"},
-                    "input_dataset": {"type": "string", "description": "Dataset to clip"},
-                    "clip_dataset": {"type": "string", "description": "Clipping dataset"},
-                    "output_dataset": {"type": "string", "description": "Output dataset name"}
+                    "datasource_path": {"type": "string", "description": "UDBX 文件路径"},
+                    "input_dataset": {"type": "string", "description": "被裁剪数据集名称"},
+                    "clip_dataset": {"type": "string", "description": "裁剪数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"}
                 },
                 "required": ["datasource_path", "input_dataset", "clip_dataset", "output_dataset"]
             }
         ),
         Tool(
             name="calculate_slope",
-            description="Calculate slope from DEM",
+            description="计算坡度，基于 DEM 栅格数据",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "datasource_path": {"type": "string", "description": "Datasource path"},
-                    "dem_dataset": {"type": "string", "description": "DEM dataset name"},
-                    "output_dataset": {"type": "string", "description": "Output slope dataset name"}
+                    "datasource_path": {"type": "string", "description": "UDBX 文件路径"},
+                    "dem_dataset": {"type": "string", "description": "DEM 数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出坡度数据集名称"}
                 },
                 "required": ["datasource_path", "dem_dataset", "output_dataset"]
             }
@@ -731,7 +759,7 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "server_url": {"type": "string", "description": "iServer 地址（默认: http:// localhost:8090）"},
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
                     "workspace_path": {"type": "string", "description": "工作空间文件路径 (.sxwu/.smwu)"},
                     "map_name": {"type": "string", "description": "地图名称"},
                     "service_name": {"type": "string", "description": "服务名称（可选，默认使用地图名称）"},
@@ -856,6 +884,104 @@ async def call_tool(name: str, arguments: dict):
             }
             ds.close()
             return [TextContent(type="text", text=json.dumps(info, indent=2))]
+        
+        # SQL 查询数据集
+        elif name == "query_dataset":
+            try:
+                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                ds = open_datasource(conn_info)
+                dataset = ds.get_dataset(arguments["dataset_name"])
+                
+                # 构建查询
+                sql_filter = arguments.get("sql_filter", "")
+                fields = arguments.get("fields", None)
+                max_results = arguments.get("max_results", 100)
+                order_by = arguments.get("order_by", "")
+                
+                # 获取字段信息
+                field_infos = []
+                field_names = []
+                for field_info in dataset.field_infos:
+                    field_names.append(field_info.name)
+                    field_infos.append({
+                        "name": field_info.name,
+                        "type": str(field_info.type),
+                        "required": field_info.is_required
+                    })
+                
+                # 获取记录
+                recordset = dataset.get_recordset()
+                if sql_filter:
+                    recordset.set_filter(sql_filter)
+                if order_by:
+                    recordset.set_order_by(order_by)
+                if fields:
+                    recordset.set_field_names(fields)
+                recordset.move_first()
+                
+                results = []
+                count = 0
+                while not recordset.is_eof and count < max_results:
+                    record = {}
+                    for field_name in (fields or field_names):
+                        try:
+                            record[field_name] = recordset.get_field_value(field_name)
+                        except:
+                            record[field_name] = None
+                    results.append(record)
+                    recordset.move_next()
+                    count += 1
+                
+                total_count = dataset.get_record_count() if hasattr(dataset, 'get_record_count') else -1
+                
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "total_count": total_count,
+                    "returned_count": len(results),
+                    "fields": field_names,
+                    "records": results
+                }, indent=2, ensure_ascii=False, default=str))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"数据集查询失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 删除数据集
+        elif name == "delete_dataset":
+            try:
+                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                ds = open_datasource(conn_info)
+                dataset_name = arguments["dataset_name"]
+                
+                if not ds.get_dataset(dataset_name):
+                    ds.close()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"数据集 '{dataset_name}' 不存在"
+                    }, indent=2))]
+                
+                success = ds.delete_dataset(dataset_name)
+                ds.close()
+                
+                if success:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "success",
+                        "message": f"数据集 '{dataset_name}' 已删除"
+                    }, indent=2))]
+                else:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"删除数据集 '{dataset_name}' 失败"
+                    }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"删除数据集失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
         
         # 导入 Shapefile
         elif name == "import_shapefile":
@@ -1685,7 +1811,7 @@ async def _check_mcp_health():
         "iobjectspy_importable": False,
         "java_path_valid": False,
         "connection_ok": False,
-        "tool_count": 53,
+        "tool_count": 55,
         "initialized": _initialized
     }
     
