@@ -5,7 +5,7 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 57/57 (全部完成)
+工具数量: 68/68 (全部完成)
 """
 
 import sys
@@ -112,6 +112,68 @@ async def list_tools():
                 }
             }
         ),
+        # ---- 工作空间管理 ----
+        Tool(
+            name="open_workspace",
+            description="打开 SuperMap 工作空间文件 (.smwu/.sxwu)，返回工作空间基本信息",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.smwu 或 .sxwu)"}
+                },
+                "required": ["workspace_path"]
+            }
+        ),
+        Tool(
+            name="save_workspace",
+            description="保存工作空间到指定路径，支持另存为",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.smwu 或 .sxwu)"},
+                    "save_as_path": {"type": "string", "description": "另存为路径（可选，不提供则覆盖保存）"}
+                },
+                "required": ["workspace_path"]
+            }
+        ),
+        Tool(
+            name="get_workspace_info",
+            description="获取工作空间详细信息，包含数据源列表、地图列表、资源列表等",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.smwu 或 .sxwu)"}
+                },
+                "required": ["workspace_path"]
+            }
+        ),
+        # ---- 投影/坐标系统 ----
+        Tool(
+            name="get_coordinate_system",
+            description="获取数据集的坐标系统信息，包括投影类型、EPSG 代码、地理/投影坐标范围",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="reproject_dataset",
+            description="将数据集从当前坐标系统转换到目标坐标系统（动态投影），输出为新数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "源 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "源数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "target_epsg": {"type": "integer", "description": "目标 EPSG 代码（如 4326 表示 WGS84、4490 表示 CGCS2000）"}
+                },
+                "required": ["datasource_path", "dataset_name", "output_dataset", "target_epsg"]
+            }
+        ),
         # ---- 数据集管理 ----
         Tool(
             name="list_datasets",
@@ -162,6 +224,79 @@ async def list_tools():
                     "dataset_name": {"type": "string", "description": "要删除的数据集名称"}
                 },
                 "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        # ---- 数据集创建与管理 ----
+        Tool(
+            name="create_dataset",
+            description="创建新的空数据集，支持点/线/面/文本/纯属性表等类型",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "新数据集名称"},
+                    "dataset_type": {"type": "string", "enum": ["POINT", "LINE", "REGION", "TEXT", "TABULAR", "POINT3D", "LINE3D", "REGION3D"], "description": "数据集类型（默认: POINT）"},
+                    "fields": {"type": "array", "items": {"type": "object"}, "description": "字段定义列表，如 [{\"name\":\"area\",\"type\":\"DOUBLE\"},{\"name\":\"name\",\"type\":\"TEXT\",\"size\":100}]"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="copy_dataset",
+            description="复制数据集到同数据源或不同数据源中",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "源 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "源数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "target_datasource_path": {"type": "string", "description": "目标 .udbx 文件路径（可选，默认与源相同）"}
+                },
+                "required": ["datasource_path", "dataset_name", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="append_to_dataset",
+            description="将一个数据集的要素追加到另一个数据集中，要求两个数据集结构相同",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "目标数据集名称"},
+                    "source_datasource_path": {"type": "string", "description": "源 .udbx 文件路径（可选，默认与目标相同）"},
+                    "source_dataset_name": {"type": "string", "description": "源数据集名称"}
+                },
+                "required": ["datasource_path", "dataset_name", "source_dataset_name"]
+            }
+        ),
+        Tool(
+            name="add_field",
+            description="为已有数据集添加新字段",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "field_name": {"type": "string", "description": "新字段名称"},
+                    "field_type": {"type": "string", "enum": ["INT32", "INT64", "DOUBLE", "TEXT", "BOOLEAN", "DATE", "DATETIME"], "description": "字段类型（默认: TEXT）"},
+                    "field_size": {"type": "integer", "description": "字段长度（仅 TEXT 类型有效，默认: 255）"}
+                },
+                "required": ["datasource_path", "dataset_name", "field_name"]
+            }
+        ),
+        Tool(
+            name="calculate_field",
+            description="对数据集字段进行批量计算赋值，支持简单表达式",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "field_name": {"type": "string", "description": "要计算的字段名称"},
+                    "expression": {"type": "string", "description": "计算表达式，如 \"Population * 1.05\" 或 \"CONCAT(Name, '_updated')\""},
+                    "sql_filter": {"type": "string", "description": "过滤条件，仅对满足条件的记录计算（可选）"}
+                },
+                "required": ["datasource_path", "dataset_name", "field_name", "expression"]
             }
         ),
         # ---- 数据导入 ----
@@ -648,6 +783,53 @@ async def list_tools():
                 "required": ["map_name"]
             }
         ),
+        Tool(
+            name="add_layer_to_map",
+            description="向工作空间中的地图添加数据集作为新图层",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.smwu/.sxwu)"},
+                    "map_name": {"type": "string", "description": "目标地图名称"},
+                    "datasource_path": {"type": "string", "description": "数据集所在 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "要添加到地图的数据集名称"}
+                },
+                "required": ["workspace_path", "map_name", "datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="export_map_image",
+            description="将工作空间中的地图导出为图片文件（PNG/JPG），支持指定范围和分辨率",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.smwu/.sxwu)"},
+                    "map_name": {"type": "string", "description": "地图名称"},
+                    "output_path": {"type": "string", "description": "输出图片路径 (.png 或 .jpg)"},
+                    "dpi": {"type": "integer", "description": "输出分辨率 DPI（默认: 96）"},
+                    "bounds": {"type": "array", "items": {"type": "number"}, "description": "导出范围 [minX, minY, maxX, maxY]（可选，默认使用地图全范围）"},
+                    "width": {"type": "integer", "description": "输出图片宽度像素（可选）"},
+                    "height": {"type": "integer", "description": "输出图片高度像素（可选）"}
+                },
+                "required": ["workspace_path", "map_name", "output_path"]
+            }
+        ),
+        Tool(
+            name="generate_map_tiles",
+            description="[iServer] 生成地图瓦片缓存，支持设定缩放级别、范围和存储格式",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "map_name": {"type": "string", "description": "地图服务名称"},
+                    "scale_denominators": {"type": "array", "items": {"type": "number"}, "description": "比例尺分母列表（可选，默认使用标准瓦片比例尺）"},
+                    "bounds": {"type": "array", "items": {"type": "number"}, "description": "瓦片范围 [minX, minY, maxX, maxY]（可选，默认使用地图全范围）"},
+                    "storage_type": {"type": "string", "enum": ["compact", "loose"], "description": "存储类型（默认: compact）"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["map_name"]
+            }
+        ),
         # ---- 工具函数 ----
         Tool(
             name="compute_distance",
@@ -873,6 +1055,203 @@ async def call_tool(name: str, arguments: dict):
             ds.close()
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
         
+        # 打开工作空间
+        elif name == "open_workspace":
+            try:
+                from iobjectspy import Workspace, WorkspaceConnectionInfo
+                ws = Workspace()
+                conn = WorkspaceConnectionInfo()
+                conn.server = arguments["workspace_path"]
+                opened = ws.open(conn)
+                if opened:
+                    ds_count = ws.datasources.count
+                    ds_names = [ws.datasources[i].alias for i in range(ds_count)]
+                    map_count = ws.maps.count
+                    map_names = [ws.maps[i].name for i in range(map_count)]
+                    info = {
+                        "status": "success",
+                        "path": arguments["workspace_path"],
+                        "datasources": ds_names,
+                        "maps": map_names,
+                        "datasource_count": ds_count,
+                        "map_count": map_count
+                    }
+                else:
+                    info = {"status": "error", "message": f"无法打开工作空间: {arguments['workspace_path']}"}
+                return [TextContent(type="text", text=json.dumps(info, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"打开工作空间失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 保存工作空间
+        elif name == "save_workspace":
+            try:
+                from iobjectspy import Workspace, WorkspaceConnectionInfo
+                ws_path = arguments["workspace_path"]
+                save_as = arguments.get("save_as_path", "")
+                ws = Workspace()
+                conn = WorkspaceConnectionInfo()
+                conn.server = ws_path
+                opened = ws.open(conn)
+                if not opened:
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间进行保存"}, indent=2))]
+                if save_as:
+                    ws.save_as(save_as)
+                    result = {"status": "success", "action": "save_as", "path": save_as}
+                else:
+                    ws.save()
+                    result = {"status": "success", "action": "save", "path": ws_path}
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"保存工作空间失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 获取工作空间信息
+        elif name == "get_workspace_info":
+            try:
+                from iobjectspy import Workspace, WorkspaceConnectionInfo
+                ws = Workspace()
+                conn = WorkspaceConnectionInfo()
+                conn.server = arguments["workspace_path"]
+                opened = ws.open(conn)
+                if not opened:
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
+                
+                # 数据源列表
+                datasources = []
+                for i in range(ws.datasources.count):
+                    ds = ws.datasources[i]
+                    ds_info = {"name": ds.alias, "engine": str(ds.engine_type)}
+                    try:
+                        ds_info["dataset_count"] = ds.datasets.count
+                    except:
+                        ds_info["dataset_count"] = -1
+                    datasources.append(ds_info)
+                
+                # 地图列表
+                maps = []
+                for i in range(ws.maps.count):
+                    m = ws.maps[i]
+                    map_info = {"name": m.name}
+                    try:
+                        map_info["layer_count"] = m.layers.count
+                    except:
+                        map_info["layer_count"] = -1
+                    maps.append(map_info)
+                
+                # 场景列表
+                scenes = []
+                try:
+                    for i in range(ws.scenes.count):
+                        scenes.append({"name": ws.scenes[i].name})
+                except:
+                    pass
+                
+                # 资源列表
+                resources = []
+                try:
+                    for i in range(ws.resources.count):
+                        resources.append({"name": ws.resources[i].name})
+                except:
+                    pass
+                
+                info = {
+                    "status": "success",
+                    "path": arguments["workspace_path"],
+                    "datasources": datasources,
+                    "maps": maps,
+                    "scenes": scenes,
+                    "resources": resources,
+                    "summary": {
+                        "datasource_count": len(datasources),
+                        "map_count": len(maps),
+                        "scene_count": len(scenes),
+                        "resource_count": len(resources)
+                    }
+                }
+                return [TextContent(type="text", text=json.dumps(info, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"获取工作空间信息失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 获取坐标系统
+        elif name == "get_coordinate_system":
+            try:
+                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                ds = open_datasource(conn_info)
+                dataset = ds.get_dataset(arguments["dataset_name"])
+                try:
+                    prj = dataset.prj_coord_sys
+                    prj_info = {
+                        "name": str(prj.name) if prj else "Unknown",
+                        "type": str(prj.type) if prj else "Unknown",
+                        "epsg_code": prj.epsg_code if prj and hasattr(prj, 'epsg_code') else None,
+                        "coord_unit": str(prj.coord_unit) if prj and hasattr(prj, 'coord_unit') else "Unknown",
+                        "distance_unit": str(prj.distance_unit) if prj and hasattr(prj, 'distance_unit') else "Unknown",
+                        "projection": str(prj.projection) if prj and hasattr(prj, 'projection') else None,
+                        "datum": str(prj.datum) if prj and hasattr(prj, 'datum') else None,
+                        "spheroid": str(prj.spheroid) if prj and hasattr(prj, 'spheroid') else None,
+                        "prime_meridian": str(prj.prime_meridian) if prj and hasattr(prj, 'prime_meridian') else None,
+                    }
+                except Exception as e:
+                    prj_info = {"error": str(e), "note": "坐标系统信息获取失败，数据集可能未设置坐标系"}
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "dataset": arguments["dataset_name"],
+                    "coordinate_system": prj_info
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"获取坐标系统失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 投影转换
+        elif name == "reproject_dataset":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                out_ds = arguments["output_dataset"]
+                target_epsg = arguments["target_epsg"]
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                dataset = ds.get_dataset(ds_name)
+                
+                # 获取目标坐标系统
+                target_prj = iobs.PrjCoordSys()
+                try:
+                    target_prj.import_from_epsg(target_epsg)
+                except Exception as e:
+                    ds.close()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"无法识别 EPSG 代码 {target_epsg}: {str(e)}"
+                    }, indent=2))]
+                
+                # 使用 iObjectsPy 的投影转换功能
+                from iobjectspy import coordtrans
+                result = coordtrans.project(
+                    ds_path, ds_name, ds_path, out_ds, target_prj
+                )
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "source_dataset": ds_name,
+                    "target_dataset": out_ds,
+                    "target_epsg": target_epsg,
+                    "result": str(result)
+                }, indent=2, ensure_ascii=False, default=str))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"投影转换失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
         # 列出数据集
         elif name == "list_datasets":
             conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
@@ -1009,6 +1388,260 @@ async def call_tool(name: str, arguments: dict):
                     "status": "error",
                     "message": f"删除数据集失败: {str(e)}",
                     "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 创建数据集
+        elif name == "create_dataset":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                ds_type_str = arguments.get("dataset_type", "POINT").upper()
+                fields_def = arguments.get("fields", None)
+                if isinstance(fields_def, str):
+                    fields_def = json.loads(fields_def)
+                
+                type_map = {
+                    "POINT": iobs.DatasetType.POINT, "LINE": iobs.DatasetType.LINE, "REGION": iobs.DatasetType.REGION,
+                    "TEXT": iobs.DatasetType.TEXT, "TABULAR": iobs.DatasetType.TABULAR,
+                    "POINT3D": iobs.DatasetType.POINT3D, "LINE3D": iobs.DatasetType.LINE3D, "REGION3D": iobs.DatasetType.REGION3D
+                }
+                ds_type = type_map.get(ds_type_str, iobs.DatasetType.POINT)
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                
+                # 创建数据集
+                if ds_type in (iobs.DatasetType.POINT, iobs.DatasetType.LINE, iobs.DatasetType.REGION,
+                               iobs.DatasetType.POINT3D, iobs.DatasetType.LINE3D, iobs.DatasetType.REGION3D):
+                    dataset = ds.create_dataset(ds_name, ds_type)
+                else:
+                    dataset = ds.create_dataset(ds_name, ds_type)
+                
+                # 添加字段
+                added_fields = []
+                if fields_def:
+                    field_infos = dataset.field_infos
+                    for f in fields_def:
+                        fname = f["name"]
+                        ftype_str = f.get("type", "TEXT").upper()
+                        fsize = f.get("size", 255)
+                        ftype_map = {
+                            "INT32": iobs.FieldType.INT32, "INT64": iobs.FieldType.INT64,
+                            "DOUBLE": iobs.FieldType.DOUBLE, "TEXT": iobs.FieldType.TEXT,
+                            "BOOLEAN": iobs.FieldType.BOOLEAN, "DATE": iobs.FieldType.DATE,
+                            "DATETIME": iobs.FieldType.DATETIME
+                        }
+                        ftype = ftype_map.get(ftype_str, iobs.FieldType.TEXT)
+                        field_info = iobs.FieldInfo(fname, ftype)
+                        if ftype == iobs.FieldType.TEXT and fsize > 0:
+                            field_info.max_length = fsize
+                        field_infos.add(field_info)
+                        added_fields.append(fname)
+                
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "dataset": ds_name,
+                    "type": ds_type_str,
+                    "added_fields": added_fields
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"创建数据集失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 复制数据集
+        elif name == "copy_dataset":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                out_name = arguments["output_dataset"]
+                target_path = arguments.get("target_datasource_path", ds_path)
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                
+                if target_path == ds_path:
+                    # 同数据源复制
+                    dataset = ds.get_dataset(ds_name)
+                    ds.copy_dataset(dataset, out_name)
+                    ds.close()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "success", "source": ds_name, "target": out_name, "target_datasource": target_path
+                    }, indent=2))]
+                else:
+                    # 跨数据源复制 - 先导出再导入
+                    import tempfile, os
+                    tmp_geojson = os.path.join(tempfile.gettempdir(), f"copy_tmp_{ds_name}.geojson")
+                    conv.export_geojson(ds_path, ds_name, tmp_geojson)
+                    ds.close()
+                    conv.import_geojson(tmp_geojson, target_path, out_dataset_name=out_name)
+                    os.remove(tmp_geojson)
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "success", "source": ds_name, "target": out_name, "target_datasource": target_path,
+                        "method": "export-then-import"
+                    }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"复制数据集失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 追加数据
+        elif name == "append_to_dataset":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                src_path = arguments.get("source_datasource_path", ds_path)
+                src_name = arguments["source_dataset_name"]
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                target_ds = ds.get_dataset(ds_name)
+                
+                src_conn_info = DatasourceConnectionInfo.make(src_path)
+                src_ds = open_datasource(src_conn_info)
+                source_dataset = src_ds.get_dataset(src_name)
+                
+                # 获取源数据集所有记录并追加到目标
+                src_rs = source_dataset.get_recordset(False)
+                src_rs.move_first()
+                count = 0
+                while not src_rs.is_eof:
+                    try:
+                        target_ds.add_record(src_rs)
+                        count += 1
+                    except:
+                        pass
+                    src_rs.move_next()
+                src_rs.close()
+                
+                src_ds.close()
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "appended_count": count,
+                    "source": f"{src_path}:{src_name}",
+                    "target": f"{ds_path}:{ds_name}"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"追加数据失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 添加字段
+        elif name == "add_field":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                fname = arguments["field_name"]
+                ftype_str = arguments.get("field_type", "TEXT").upper()
+                fsize = arguments.get("field_size", 255)
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                dataset = ds.get_dataset(ds_name)
+                
+                ftype_map = {
+                    "INT32": iobs.FieldType.INT32, "INT64": iobs.FieldType.INT64,
+                    "DOUBLE": iobs.FieldType.DOUBLE, "TEXT": iobs.FieldType.TEXT,
+                    "BOOLEAN": iobs.FieldType.BOOLEAN, "DATE": iobs.FieldType.DATE,
+                    "DATETIME": iobs.FieldType.DATETIME
+                }
+                ftype = ftype_map.get(ftype_str, iobs.FieldType.TEXT)
+                
+                field_info = iobs.FieldInfo(fname, ftype)
+                if ftype == iobs.FieldType.TEXT and fsize > 0:
+                    field_info.max_length = fsize
+                
+                dataset.field_infos.add(field_info)
+                ds.close()
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "dataset": ds_name,
+                    "field": fname,
+                    "type": ftype_str,
+                    "size": fsize if ftype_str == "TEXT" else None
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"添加字段失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 字段计算
+        elif name == "calculate_field":
+            try:
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                field_name = arguments["field_name"]
+                expression = arguments["expression"]
+                sql_filter = arguments.get("sql_filter", "")
+                
+                conn_info = DatasourceConnectionInfo.make(ds_path)
+                ds = open_datasource(conn_info)
+                dataset = ds.get_dataset(ds_name)
+                
+                rs = dataset.get_recordset(False)
+                if sql_filter:
+                    rs.set_filter(sql_filter)
+                
+                count = 0
+                rs.move_first()
+                while not rs.is_eof:
+                    try:
+                        # 简单表达式解析
+                        expr = expression.strip()
+                        if '"' in expr or "'" in expr:
+                            # 字符串赋值
+                            value = expr.strip('"').strip("'")
+                        elif '+' in expr and not expr.replace('+', '').replace('-', '').replace('.', '').replace(' ', '').isdigit():
+                            # 字符串拼接
+                            parts = expr.split('+')
+                            val = ""
+                            for p in parts:
+                                p = p.strip().strip('"').strip("'")
+                                try:
+                                    val += str(rs.get_field_value(p))
+                                except:
+                                    val += p
+                            value = val
+                        elif '*' in expr or '/' in expr or '+' in expr or '-' in expr:
+                            # 数学表达式 - 替换字段名为值
+                            eval_expr = expr
+                            for fn in dataset.field_infos:
+                                try:
+                                    fv = rs.get_field_value(fn.name)
+                                    eval_expr = eval_expr.replace(fn.name, str(float(fv) if fv is not None else '0'))
+                                except:
+                                    pass
+                            value = eval(eval_expr)
+                        else:
+                            # 直接字段引用或数值
+                            try:
+                                value = float(expr)
+                            except ValueError:
+                                try:
+                                    value = rs.get_field_value(expr)
+                                except:
+                                    value = expr
+                        rs.set_field_value(field_name, value)
+                        rs.update()
+                        count += 1
+                    except Exception:
+                        pass
+                    rs.move_next()
+                rs.close()
+                ds.close()
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "updated_count": count,
+                    "field": field_name,
+                    "expression": expression
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"字段计算失败: {str(e)}", "traceback": traceback.format_exc()
                 }, indent=2))]
         
         # 导入 Shapefile
@@ -1789,6 +2422,106 @@ async def call_tool(name: str, arguments: dict):
                 "note": "请通过 iDesktopX 或 iServer REST API 获取详细地图信息"
             }, indent=2))]
         
+        # 添加图层到地图
+        elif name == "add_layer_to_map":
+            try:
+                from iobjectspy import Workspace, WorkspaceConnectionInfo
+                ws_path = arguments["workspace_path"]
+                map_name = arguments["map_name"]
+                ds_path = arguments["datasource_path"]
+                ds_name = arguments["dataset_name"]
+                
+                ws = Workspace()
+                conn = WorkspaceConnectionInfo()
+                conn.server = ws_path
+                opened = ws.open(conn)
+                if not opened:
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
+                
+                # 打开数据源
+                ds_conn = DatasourceConnectionInfo.make(ds_path)
+                # 检查工作空间是否已包含此数据源
+                ds_alias = None
+                for i in range(ws.datasources.count):
+                    if ws_path in ds_path or ds_path.replace("/", "\\") in str(ws.datasources[i].connection_info.server):
+                        ds_alias = ws.datasources[i].alias
+                        break
+                
+                if ds_alias is None:
+                    ds_alias = ds.get_dataset(ds_name).datasource.alias
+                
+                m = ws.maps.get(map_name)
+                if m is None:
+                    ws.close()
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": f"地图 '{map_name}' 不存在"}, indent=2))]
+                
+                # 添加图层
+                m.layers.add_dataset(ws, ds_alias, ds_name, True)
+                ws.save()
+                ws.close()
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "map": map_name,
+                    "added_layer": ds_name,
+                    "datasource": ds_alias
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"添加图层失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导出地图图片
+        elif name == "export_map_image":
+            try:
+                from iobjectspy import Workspace, WorkspaceConnectionInfo
+                ws_path = arguments["workspace_path"]
+                map_name = arguments["map_name"]
+                output_path = arguments["output_path"]
+                dpi = arguments.get("dpi", 96)
+                bounds = arguments.get("bounds", None)
+                width = arguments.get("width", None)
+                height = arguments.get("height", None)
+                
+                ws = Workspace()
+                conn = WorkspaceConnectionInfo()
+                conn.server = ws_path
+                opened = ws.open(conn)
+                if not opened:
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
+                
+                m = ws.maps.get(map_name)
+                if m is None:
+                    ws.close()
+                    return [TextContent(type="text", text=json.dumps({"status": "error", "message": f"地图 '{map_name}' 不存在"}, indent=2))]
+                
+                # 设置输出参数
+                if bounds:
+                    m.view_bounds = iobs.Rectangle2D(bounds[0], bounds[1], bounds[2], bounds[3])
+                
+                m.output_dpi = dpi
+                if width:
+                    m.output_width = width
+                if height:
+                    m.output_height = height
+                
+                # 导出图片
+                m.output_to_file(output_path)
+                ws.close()
+                
+                import os
+                file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "output": output_path,
+                    "dpi": dpi,
+                    "file_size_bytes": file_size
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"导出地图图片失败: {str(e)}", "traceback": traceback.format_exc()
+                }, indent=2))]
+        
         # 计算距离
         elif name == "compute_distance":
             try:
@@ -1981,6 +2714,38 @@ async def _handle_iserver_tool(name: str, arguments: dict):
                 "response": resp.text
             }, indent=2))]
         
+        elif name == "generate_map_tiles":
+            map_name = arguments["map_name"]
+            storage_type = arguments.get("storage_type", "compact")
+            scale_denoms = arguments.get("scale_denominators", None)
+            bounds = arguments.get("bounds", None)
+            if isinstance(scale_denoms, str):
+                scale_denoms = json.loads(scale_denoms)
+            if isinstance(bounds, str):
+                bounds = json.loads(bounds)
+            
+            # 构建 REST API 请求体
+            payload = {
+                "serviceName": f"map-{map_name}",
+                "type": "map",
+                "storageType": storage_type
+            }
+            if scale_denoms:
+                payload["scales"] = scale_denoms
+            if bounds:
+                payload["bounds"] = {"left": bounds[0], "bottom": bounds[1], "right": bounds[2], "top": bounds[3]}
+            
+            resp = requests.post(
+                f"{server_url}/iserver/services/map-{map_name}/rest/maps/{map_name}/tilesets.json",
+                json=payload, headers=headers, timeout=60
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "map": map_name,
+                "storage_type": storage_type,
+                "response": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+            }, indent=2, ensure_ascii=False))]
+        
         else:
             return [TextContent(type="text", text=json.dumps({
                 "status": "error", "message": f"未知 iServer 工具: {name}"
@@ -1999,7 +2764,7 @@ async def _check_mcp_health():
         "iobjectspy_importable": False,
         "java_path_valid": False,
         "connection_ok": False,
-        "tool_count": 57,
+        "tool_count": 68,
         "initialized": _initialized
     }
     
