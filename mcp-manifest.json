@@ -1,7 +1,7 @@
 {
   "name": "supermap-mcp-server",
-  "version": "1.0.0",
-  "description": "SuperMap iDesktopX MCP Server - 50+ GIS automation tools based on iObjectsPy",
+  "version": "2.0.0",
+  "description": "SuperMap iObjectsPy MCP Server - 53 GIS automation tools (iDesktopX + iServer REST API)",
   "author": "kruie",
   "license": "MIT",
   "type": "mcp-server",
@@ -17,6 +17,11 @@
       "system": true
     },
     {
+      "name": "mcp",
+      "version": ">=1.0.0",
+      "pip": true
+    },
+    {
       "name": "numpy",
       "version": ">=1.24.0",
       "pip": true
@@ -24,6 +29,11 @@
     {
       "name": "pandas",
       "version": ">=2.0.0",
+      "pip": true
+    },
+    {
+      "name": "requests",
+      "version": ">=2.28.0",
       "pip": true
     }
   ],
@@ -38,18 +48,72 @@
     }
   },
   "tools": {
+    "count": 53,
     "categories": [
-      "Data Management",
-      "Data Import/Export",
-      "Spatial Analysis",
-      "Spatial Query",
-      "Data Quality Check",
-      "Map Cartography",
-      "3D Analysis"
-    ],
-    "count": 50
+      {
+        "name": "Initialization & Environment",
+        "tools": ["initialize_supermap", "get_environment_info", "check_mcp_health"]
+      },
+      {
+        "name": "Datasource Management",
+        "tools": ["open_udbx_datasource", "create_udbx_datasource", "create_memory_datasource"]
+      },
+      {
+        "name": "Dataset Management",
+        "tools": ["list_datasets", "get_dataset_info"]
+      },
+      {
+        "name": "Data Import",
+        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm"]
+      },
+      {
+        "name": "Data Export",
+        "tools": ["export_shapefile", "export_geojson", "export_tiff"]
+      },
+      {
+        "name": "Dataset Operations",
+        "tools": ["dataset_point_to_line", "dataset_line_to_region", "dataset_region_to_line", "dissolve"]
+      },
+      {
+        "name": "Spatial Analysis",
+        "tools": ["create_buffer", "create_multi_buffer", "overlay", "clip_data"]
+      },
+      {
+        "name": "Raster Analysis",
+        "tools": ["calculate_slope", "calculate_aspect", "calculate_hillshade"]
+      },
+      {
+        "name": "Interpolation",
+        "tools": ["idw_interpolate", "kriging_interpolate"]
+      },
+      {
+        "name": "Density Analysis",
+        "tools": ["kernel_density"]
+      },
+      {
+        "name": "Hydrology Analysis",
+        "tools": ["fill_sink", "watershed"]
+      },
+      {
+        "name": "Other Analysis",
+        "tools": ["create_thiessen_polygons", "aggregate_points", "reclassify"]
+      },
+      {
+        "name": "Map Cartography",
+        "tools": ["create_map", "list_maps", "get_map_info"]
+      },
+      {
+        "name": "Utility Functions",
+        "tools": ["compute_distance", "compute_geodesic_area"]
+      },
+      {
+        "name": "iServer REST API",
+        "tools": ["iserver_get_service_list", "iserver_get_service_status", "iserver_start_service", "iserver_stop_service", "iserver_restart_service", "iserver_get_map_info", "iserver_query_data", "iserver_clear_cache", "iserver_publish_map_service", "iserver_get_token"]
+      }
+    ]
   },
   "skills": [
-    "supermap-idesktop-skill"
+    "supermap-idesktop-skill",
+    "supermap-iserver-skill"
   ]
 }

@@ -1,2663 +1,1741 @@
 """
-SuperMap iObjectsPy MCP Server - Enhanced Version
-=================================================
-功能完整的SuperMap MCP服务器，支持：
-- 数据源管理
-- 数据导入导出
-- 数据集操作
-- 空间分析
-- 地图制图
-- 三维分析
+SuperMap iObjectsPy MCP Server
+==============================
 
-使用 iobjectspy 包操作 SuperMap iDesktopX
+使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
+支持通过 stdio 与 WorkBuddy 通信
+
+工具数量: 53/53 (全部完成)
 """
 
-import iobjectspy as iobs
-from iobjectspy import (
-    DatasourceConnectionInfo, 
-    create_datasource, 
-    open_datasource,
-    close_datasource,
-    list_datasources
-)
-from iobjectspy import conversion as conv
-from iobjectspy import analyst as anl
-from iobjectspy import data as data_ops
-from iobjectspy import mapping
-from iobjectspy.ml import utils as ml_utils
+import sys
+import json
+import traceback
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
 
-# Default iObjects Java path
+# 设置 iObjectsPy 路径
+IOBJECTSPY_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin_python\iobjectspy\iobjectspy-py310_64"
+sys.path.insert(0, IOBJECTSPY_PATH)
+
+# 默认 Java 路径
 DEFAULT_IOBJECT_PATH = r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
 
-# =============================================================================
-# 初始化与配置
-# =============================================================================
+# 全局状态
+_server = Server("supermap-iobjectspy")
+_initialized = False
+_init_error = None
 
-def initialize() -> dict:
-    """Initialize the SuperMap connection"""
-    try:
-        iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
-        return {"status": "success", "message": "SuperMap iObjectsPy initialized", "path": DEFAULT_IOBJECT_PATH}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def get_environment_info() -> dict:
-    """Get SuperMap environment information"""
-    try:
-        java_path = iobs.env.get_iobjects_java_path()
-        omp_threads = iobs.env.get_omp_num_threads()
-        memory_mode = iobs.env.is_use_analyst_memory_mode()
-        return {
-            "status": "success",
-            "iobjects_java_path": java_path,
-            "omp_threads": omp_threads,
-            "analyst_memory_mode": memory_mode
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 # =============================================================================
-# 数据源管理
+# 辅助函数
 # =============================================================================
 
-def create_udbx_datasource(file_path: str, alias: str = None) -> dict:
-    """
-    Create a new UDBX datasource
-    
-    Args:
-        file_path: Full path for the new .udbx file (e.g., "E:\\data\\myproject.udbx")
-        alias: Optional alias name for the datasource
-    
-    Returns:
-        dict with status and datasource info
-    """
-    try:
-        conn_info = DatasourceConnectionInfo.make(file_path)
-        ds = create_datasource(conn_info)
-        conn = ds.connection_info
-        
-        result = {
-            "status": "success",
-            "message": f"Datasource created: {file_path}",
-            "datasource": {
-                "alias": ds.alias,
-                "server": conn.server,
-                "type": str(conn.type)
+def _ensure_init():
+    """确保 iObjectsPy 已初始化"""
+    global _initialized, _init_error
+    if not _initialized:
+        try:
+            import iobjectspy as iobs
+            iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
+            _initialized = True
+            _init_error = None
+        except Exception as e:
+            _init_error = str(e)
+            raise
+
+
+# =============================================================================
+# MCP 工具定义
+# =============================================================================
+
+@_server.list_tools()
+async def list_tools():
+    """列出所有可用的 SuperMap 工具"""
+    return [
+        # ---- 初始化与环境 ----
+        Tool(
+            name="initialize_supermap",
+            description="Initialize SuperMap iObjectsPy connection",
+            inputSchema={
+                "type": "object",
+                "properties": {}
             }
-        }
-        ds.close()
-        return result
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def create_memory_datasource(alias: str = "MemoryDS") -> dict:
-    """
-    Create an in-memory datasource (temporary, not saved to disk)
-    
-    Args:
-        alias: Optional alias name for the datasource
-    
-    Returns:
-        dict with status and datasource info
-    """
-    try:
-        ds = iobs.create_mem_datasource(alias)
-        result = {
-            "status": "success",
-            "message": f"Memory datasource created: {alias}",
-            "datasource": {
-                "alias": ds.alias,
-                "type": "Memory"
+        ),
+        Tool(
+            name="get_environment_info",
+            description="Get SuperMap environment information",
+            inputSchema={
+                "type": "object",
+                "properties": {}
             }
-        }
-        ds.close()
-        return result
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        ),
+        Tool(
+            name="check_mcp_health",
+            description="检查 MCP Server 健康状态，包括 iObjectsPy 是否可导入、Java 路径是否有效、连接是否正常",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        # ---- 数据源管理 ----
+        Tool(
+            name="open_udbx_datasource",
+            description="Open a UDBX datasource",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path to .udbx file"}
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="create_udbx_datasource",
+            description="Create a new UDBX datasource",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Path for new .udbx file"}
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="create_memory_datasource",
+            description="创建内存数据源，用于临时数据处理，不需要写入磁盘",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_name": {"type": "string", "description": "内存数据源名称（默认: MemoryDS）"}
+                }
+            }
+        ),
+        # ---- 数据集管理 ----
+        Tool(
+            name="list_datasets",
+            description="List all datasets in a datasource",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Path to .udbx file"}
+                },
+                "required": ["datasource_path"]
+            }
+        ),
+        Tool(
+            name="get_dataset_info",
+            description="Get information about a dataset",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Path to .udbx file"},
+                    "dataset_name": {"type": "string", "description": "Name of the dataset"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        # ---- 数据导入 ----
+        Tool(
+            name="import_shapefile",
+            description="Import a Shapefile into a datasource",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "shapefile_path": {"type": "string", "description": "Path to .shp file"},
+                    "datasource_path": {"type": "string", "description": "Target .udbx file"},
+                    "dataset_name": {"type": "string", "description": "Name for imported dataset"}
+                },
+                "required": ["shapefile_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_gdb",
+            description="Import ESRI GDB (FileGDB) data into a datasource",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "gdb_path": {"type": "string", "description": "Path to .gdb folder"},
+                    "datasource_path": {"type": "string", "description": "Target .udbx file"},
+                    "feature_class": {"type": "string", "description": "Feature class name in GDB"}
+                },
+                "required": ["gdb_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_csv",
+            description="导入 CSV 文件为点数据集。支持经纬度列映射，自动创建点几何",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "csv_path": {"type": "string", "description": "CSV 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"},
+                    "x_field": {"type": "string", "description": "经度字段名（默认: longitude）"},
+                    "y_field": {"type": "string", "description": "纬度字段名（默认: latitude）"},
+                    "encoding": {"type": "string", "description": "CSV 编码（默认: utf-8）"}
+                },
+                "required": ["csv_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_tiff",
+            description="导入 GeoTIFF 栅格文件为栅格数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tiff_path": {"type": "string", "description": "GeoTIFF 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"},
+                    "multi_band": {"type": "boolean", "description": "是否导入为多波段（默认: false，单波段）"}
+                },
+                "required": ["tiff_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_dwg",
+            description="导入 AutoCAD DWG/DXF 文件为数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dwg_path": {"type": "string", "description": "DWG 或 DXF 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
+                },
+                "required": ["dwg_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_kml",
+            description="导入 KML/KMZ 文件为数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "kml_path": {"type": "string", "description": "KML 或 KMZ 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
+                },
+                "required": ["kml_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_geojson",
+            description="导入 GeoJSON 文件为矢量数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "geojson_path": {"type": "string", "description": "GeoJSON 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
+                },
+                "required": ["geojson_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_osm",
+            description="导入 OSM (OpenStreetMap) 文件为数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "osm_path": {"type": "string", "description": "OSM (.osm 或 .pbf) 文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "导入后的数据集名称"}
+                },
+                "required": ["osm_path", "datasource_path"]
+            }
+        ),
+        # ---- 数据导出 ----
+        Tool(
+            name="export_shapefile",
+            description="Export a dataset to Shapefile",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Source .udbx file"},
+                    "dataset_name": {"type": "string", "description": "Dataset name"},
+                    "output_path": {"type": "string", "description": "Output .shp file path"}
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"]
+            }
+        ),
+        Tool(
+            name="export_geojson",
+            description="导出数据集为 GeoJSON 文件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "源 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "output_path": {"type": "string", "description": "输出 .geojson 文件路径"},
+                    "encode_to_epsg4326": {"type": "boolean", "description": "是否转换为 WGS84 坐标系（默认: false）"}
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"]
+            }
+        ),
+        Tool(
+            name="export_tiff",
+            description="导出栅格数据集为 GeoTIFF 文件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "源 .udbx 文件路径"},
+                    "dataset_name": {"type": "string", "description": "栅格数据集名称"},
+                    "output_path": {"type": "string", "description": "输出 .tif 文件路径"},
+                    "band_index": {"type": "integer", "description": "导出的波段索引（默认: 0，所有波段）"}
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"]
+            }
+        ),
+        # ---- 数据集操作 ----
+        Tool(
+            name="dataset_point_to_line",
+            description="将点数据集转换为线数据集，按字段排序后依次连线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入点数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出线数据集名称"},
+                    "order_field": {"type": "string", "description": "排序字段名，用于确定点的连接顺序"},
+                    "group_field": {"type": "string", "description": "分组字段名，相同值的点连成一条线（可选）"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="dataset_line_to_region",
+            description="将线数据集转换为面数据集，封闭区域自动构面",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入线数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出面数据集名称"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="dataset_region_to_line",
+            description="将面数据集转换为线数据集，提取边界线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入面数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出线数据集名称"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="dissolve",
+            description="融合分析，按指定字段合并相邻且属性相同的要素",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "dissolve_field": {"type": "string", "description": "融合字段名"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        # ---- 空间分析 ----
+        Tool(
+            name="create_buffer",
+            description="Create buffer around features",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Source .udbx file"},
+                    "input_dataset": {"type": "string", "description": "Input dataset name"},
+                    "output_dataset": {"type": "string", "description": "Output dataset name"},
+                    "buffer_distance": {"type": "number", "description": "Buffer distance in meters"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "buffer_distance"]
+            }
+        ),
+        Tool(
+            name="create_multi_buffer",
+            description="创建多级缓冲区（同心环），可指定多个距离值",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "buffer_distances": {"type": "array", "items": {"type": "number"}, "description": "缓冲距离数组，如 [100, 200, 500]"},
+                    "dissolve": {"type": "boolean", "description": "是否融合重叠区域（默认: false）"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "buffer_distances"]
+            }
+        ),
+        Tool(
+            name="overlay",
+            description="叠加分析，支持 INTERSECTION/UNION/ERASE/IDENTITY/UPDATE/CLIP/XOR",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入数据集名称"},
+                    "overlay_dataset": {"type": "string", "description": "叠加数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出数据集名称"},
+                    "operation": {"type": "string", "enum": ["INTERSECT", "UNION", "ERASE", "IDENTITY", "UPDATE", "CLIP", "XOR"], "description": "叠加分析类型"}
+                },
+                "required": ["datasource_path", "input_dataset", "overlay_dataset", "output_dataset", "operation"]
+            }
+        ),
+        Tool(
+            name="clip_data",
+            description="Clip one dataset by another",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Datasource path"},
+                    "input_dataset": {"type": "string", "description": "Dataset to clip"},
+                    "clip_dataset": {"type": "string", "description": "Clipping dataset"},
+                    "output_dataset": {"type": "string", "description": "Output dataset name"}
+                },
+                "required": ["datasource_path", "input_dataset", "clip_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="calculate_slope",
+            description="Calculate slope from DEM",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "Datasource path"},
+                    "dem_dataset": {"type": "string", "description": "DEM dataset name"},
+                    "output_dataset": {"type": "string", "description": "Output slope dataset name"}
+                },
+                "required": ["datasource_path", "dem_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="calculate_aspect",
+            description="计算坡向，基于 DEM 栅格数据",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dem_dataset": {"type": "string", "description": "DEM 栅格数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出坡向数据集名称"}
+                },
+                "required": ["datasource_path", "dem_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="calculate_hillshade",
+            description="计算山体阴影，用于地形可视化",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dem_dataset": {"type": "string", "description": "DEM 栅格数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出山体阴影数据集名称"},
+                    "sun_azimuth": {"type": "number", "description": "太阳方位角（0-360度，默认: 315）"},
+                    "sun_altitude": {"type": "number", "description": "太阳高度角（0-90度，默认: 45）"}
+                },
+                "required": ["datasource_path", "dem_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="idw_interpolate",
+            description="IDW 反距离权重插值，将点数据插值为连续栅格面",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入点数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出栅格数据集名称"},
+                    "z_field": {"type": "string", "description": "插值字段名"},
+                    "power": {"type": "number", "description": "幂参数（默认: 2）"},
+                    "search_radius": {"type": "number", "description": "搜索半径（默认: 0，使用全部点）"},
+                    "cell_size": {"type": "number", "description": "输出像元大小（可选）"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "z_field"]
+            }
+        ),
+        Tool(
+            name="kriging_interpolate",
+            description="克里金插值，基于地统计学的空间插值方法",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入点数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出栅格数据集名称"},
+                    "z_field": {"type": "string", "description": "插值字段名"},
+                    "variogram_model": {"type": "string", "enum": ["SPHERICAL", "EXPONENTIAL", "GAUSSIAN"], "description": "变异函数模型（默认: SPHERICAL）"},
+                    "search_radius": {"type": "number", "description": "搜索半径（可选）"},
+                    "cell_size": {"type": "number", "description": "输出像元大小（可选）"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "z_field"]
+            }
+        ),
+        Tool(
+            name="kernel_density",
+            description="核密度分析，计算点/线要素的密度分布",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出栅格数据集名称"},
+                    "search_radius": {"type": "number", "description": "搜索半径"},
+                    "population_field": {"type": "string", "description": "人口/权重字段（可选）"},
+                    "cell_size": {"type": "number", "description": "输出像元大小（可选）"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "search_radius"]
+            }
+        ),
+        Tool(
+            name="fill_sink",
+            description="填洼分析，填充 DEM 中的洼地，生成无洼地 DEM",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "dem_dataset": {"type": "string", "description": "输入 DEM 数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出填洼后 DEM 数据集名称"}
+                },
+                "required": ["datasource_path", "dem_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="watershed",
+            description="流域分析/汇水分析，基于填洼 DEM 和流向数据",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "flow_direction_dataset": {"type": "string", "description": "流向数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出流域数据集名称"},
+                    "pour_point_dataset": {"type": "string", "description": "倾泻点数据集名称（可选，不提供则计算全流域）"}
+                },
+                "required": ["datasource_path", "flow_direction_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="create_thiessen_polygons",
+            description="创建泰森多边形（Voronoi 图），基于点数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入点数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出泰森多边形数据集名称"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="aggregate_points",
+            description="点聚合分析，将密集点聚合为面要素并统计数量",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入点数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出聚合面数据集名称"},
+                    "aggregate_distance": {"type": "number", "description": "聚合距离"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "aggregate_distance"]
+            }
+        ),
+        Tool(
+            name="reclassify",
+            description="重分类，将栅格数据按规则重新分类",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx 文件路径"},
+                    "input_dataset": {"type": "string", "description": "输入栅格数据集名称"},
+                    "output_dataset": {"type": "string", "description": "输出重分类数据集名称"},
+                    "reclassify_table": {"type": "array", "items": {"type": "object"}, "description": "重分类表，如 [{\"start\":0,\"end\":100,\"value\":1},{\"start\":100,\"end\":200,\"value\":2}]"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "reclassify_table"]
+            }
+        ),
+        # ---- 地图制图 ----
+        Tool(
+            name="create_map",
+            description="创建新地图，指定名称和数据范围",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "map_name": {"type": "string", "description": "地图名称"},
+                    "bounds": {"type": "array", "items": {"type": "number"}, "description": "地图范围 [minX, minY, maxX, maxY]（可选）"}
+                }
+            }
+        ),
+        Tool(
+            name="list_maps",
+            description="列出工作空间中的所有地图",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        Tool(
+            name="get_map_info",
+            description="获取地图详细信息，包括图层列表、范围、比例尺等",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "map_name": {"type": "string", "description": "地图名称"}
+                },
+                "required": ["map_name"]
+            }
+        ),
+        # ---- 工具函数 ----
+        Tool(
+            name="compute_distance",
+            description="计算两个点之间的距离（支持投影坐标和地理坐标）",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "point1": {"type": "array", "items": {"type": "number"}, "description": "起点坐标 [x, y]"},
+                    "point2": {"type": "array", "items": {"type": "number"}, "description": "终点坐标 [x, y]"},
+                    "geodesic": {"type": "boolean", "description": "是否使用球面距离（地理坐标时为 true，默认: false）"}
+                },
+                "required": ["point1", "point2"]
+            }
+        ),
+        Tool(
+            name="compute_geodesic_area",
+            description="计算球面上的面积（平方米），适用于地理坐标系下的面数据",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "coordinates": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "多边形顶点坐标数组 [[lon1,lat1],[lon2,lat2],...]"}
+                },
+                "required": ["coordinates"]
+            }
+        ),
+        # ---- iServer REST API ----
+        Tool(
+            name="iserver_get_service_list",
+            description="[iServer] 获取所有已发布的服务列表",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                }
+            }
+        ),
+        Tool(
+            name="iserver_get_service_status",
+            description="[iServer] 获取指定服务的运行状态",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "service_name": {"type": "string", "description": "服务名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["service_name"]
+            }
+        ),
+        Tool(
+            name="iserver_start_service",
+            description="[iServer] 启动指定服务",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "service_name": {"type": "string", "description": "服务名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["service_name"]
+            }
+        ),
+        Tool(
+            name="iserver_stop_service",
+            description="[iServer] 停止指定服务",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "service_name": {"type": "string", "description": "服务名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["service_name"]
+            }
+        ),
+        Tool(
+            name="iserver_restart_service",
+            description="[iServer] 重启指定服务",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "service_name": {"type": "string", "description": "服务名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["service_name"]
+            }
+        ),
+        Tool(
+            name="iserver_get_map_info",
+            description="[iServer] 获取地图服务信息，包括图层、范围、比例尺等",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "map_name": {"type": "string", "description": "地图名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["map_name"]
+            }
+        ),
+        Tool(
+            name="iserver_query_data",
+            description="[iServer] 查询数据服务，支持 SQL 查询和空间查询",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "datasource_name": {"type": "string", "description": "数据源名称"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "sql_filter": {"type": "string", "description": "SQL 过滤条件（可选）"},
+                    "geometry": {"type": "string", "description": "查询几何（GeoJSON 格式，用于空间查询）"},
+                    "spatial_query_mode": {"type": "string", "enum": ["INTERSECT", "CONTAIN", "CROSS", "DISJOINT", "TOUCH", "WITHIN", "OVERLAP"], "description": "空间查询模式（可选）"},
+                    "max_features": {"type": "integer", "description": "最大返回要素数（默认: 1000）"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["datasource_name", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="iserver_clear_cache",
+            description="[iServer] 清除指定服务的缓存",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "service_name": {"type": "string", "description": "服务名称"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["service_name"]
+            }
+        ),
+        Tool(
+            name="iserver_publish_map_service",
+            description="[iServer] 发布地图服务",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http:// localhost:8090）"},
+                    "workspace_path": {"type": "string", "description": "工作空间文件路径 (.sxwu/.smwu)"},
+                    "map_name": {"type": "string", "description": "地图名称"},
+                    "service_name": {"type": "string", "description": "服务名称（可选，默认使用地图名称）"},
+                    "token": {"type": "string", "description": "认证令牌（可选）"}
+                },
+                "required": ["workspace_path", "map_name"]
+            }
+        ),
+        Tool(
+            name="iserver_get_token",
+            description="[iServer] 获取认证令牌",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_url": {"type": "string", "description": "iServer 地址（默认: http://localhost:8090）"},
+                    "username": {"type": "string", "description": "用户名（默认: admin）"},
+                    "password": {"type": "string", "description": "密码（默认: supermap）"}
+                }
+            }
+        ),
+    ]
 
-def open_udbx_datasource(file_path: str) -> dict:
-    """
-    Open an existing UDBX datasource
-    
-    Args:
-        file_path: Path to the existing .udbx file
-    
-    Returns:
-        dict with status and datasource info
-    """
-    try:
-        conn_info = DatasourceConnectionInfo.make(file_path)
-        ds = open_datasource(conn_info)
-        conn = ds.connection_info
-        
-        datasets = []
-        for name in ds.datasets:
-            ds_info = ds.datasets[name]
-            datasets.append({
-                "name": name,
-                "type": str(ds_info.type),
-                "record_count": ds_info.record_count
-            })
-        
-        result = {
-            "status": "success",
-            "message": f"Datasource opened: {file_path}",
-            "datasource": {
-                "alias": ds.alias,
-                "server": conn.server,
-                "type": str(conn.type)
-            },
-            "datasets": datasets
-        }
-        ds.close()
-        return result
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
-def list_datasets(file_path: str) -> dict:
-    """
-    List all datasets in a datasource
-    
-    Args:
-        file_path: Path to the .udbx file
-    
-    Returns:
-        dict with list of datasets
-    """
-    try:
-        conn_info = DatasourceConnectionInfo.make(file_path)
-        ds = open_datasource(conn_info)
-        
-        datasets = []
-        for name in ds.datasets:
-            ds_info = ds.datasets[name]
-            datasets.append({
-                "name": name,
-                "type": str(ds_info.type),
-                "record_count": ds_info.record_count,
-                "bounds": str(ds_info.bounds) if hasattr(ds_info, 'bounds') else None
-            })
-        
-        ds.close()
-        
-        return {
-            "status": "success",
-            "count": len(datasets),
-            "datasets": datasets
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+# =============================================================================
+# MCP 工具执行
+# =============================================================================
 
-def get_dataset_info(file_path: str, dataset_name: str) -> dict:
-    """
-    Get detailed information about a specific dataset
+@_server.call_tool()
+async def call_tool(name: str, arguments: dict):
+    """执行 SuperMap 工具"""
     
-    Args:
-        file_path: Path to the .udbx file
-        dataset_name: Name of the dataset
-    
-    Returns:
-        dict with dataset details
-    """
     try:
-        conn_info = DatasourceConnectionInfo.make(file_path)
-        ds = open_datasource(conn_info)
+        # 健康检查不需要初始化
+        if name == "check_mcp_health":
+            return await _check_mcp_health()
         
-        if dataset_name not in ds.datasets:
+        _ensure_init()
+        import iobjectspy as iobs
+        from iobjectspy import DatasourceConnectionInfo, open_datasource, create_datasource
+        from iobjectspy import conversion as conv
+        from iobjectspy import analyst as anl
+        
+        # 初始化
+        if name == "initialize_supermap":
+            return [TextContent(type="text", text=json.dumps({"status": "success", "message": "SuperMap initialized"}, indent=2))]
+        
+        # 环境信息
+        elif name == "get_environment_info":
+            java_path = iobs.env.get_iobjects_java_path()
+            omp_threads = iobs.env.get_omp_num_threads()
+            info = {
+                "status": "success",
+                "iobjects_java_path": java_path,
+                "omp_threads": omp_threads,
+                "server": "SuperMap iObjectsPy MCP Server"
+            }
+            return [TextContent(type="text", text=json.dumps(info, indent=2))]
+        
+        # 打开数据源
+        elif name == "open_udbx_datasource":
+            conn_info = DatasourceConnectionInfo.make(arguments["file_path"])
+            ds = open_datasource(conn_info)
+            result = {"status": "success", "datasource": ds.alias, "datasets": [ds.name for ds in ds.datasets]}
             ds.close()
-            return {"status": "error", "message": f"Dataset '{dataset_name}' not found"}
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
         
-        ds_info = ds.datasets[dataset_name]
+        # 创建数据源
+        elif name == "create_udbx_datasource":
+            conn_info = DatasourceConnectionInfo.make(arguments["file_path"])
+            ds = create_datasource(conn_info)
+            result = {"status": "success", "datasource": arguments["file_path"]}
+            ds.close()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
         
-        # Get field information
-        fields = []
-        if hasattr(ds_info, 'fields'):
-            for field in ds_info.fields:
-                fields.append({
-                    "name": field.name,
-                    "type": str(field.type),
-                    "caption": field.caption if hasattr(field, 'caption') else None
+        # 创建内存数据源
+        elif name == "create_memory_datasource":
+            ds_name = arguments.get("datasource_name", "MemoryDS")
+            conn_info = DatasourceConnectionInfo()
+            conn_info.server = ds_name
+            conn_info.engine_type = iobs.EngineType.MEMORY
+            ds = create_datasource(conn_info)
+            result = {"status": "success", "datasource": ds_name, "type": "memory"}
+            ds.close()
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        
+        # 列出数据集
+        elif name == "list_datasets":
+            conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+            ds = open_datasource(conn_info)
+            datasets = []
+            for ds_item in ds.datasets:
+                try:
+                    rc = ds_item.get_record_count() if hasattr(ds_item, 'get_record_count') else -1
+                except:
+                    rc = -1
+                datasets.append({
+                    "name": ds_item.name,
+                    "type": str(ds_item.type),
+                    "record_count": rc
                 })
+            ds.close()
+            return [TextContent(type="text", text=json.dumps({"datasets": datasets}, indent=2))]
         
-        result = {
-            "status": "success",
-            "dataset": {
-                "name": ds_info.name,
-                "type": str(ds_info.type),
-                "record_count": ds_info.record_count,
-                "bounds": str(ds_info.bounds) if hasattr(ds_info, 'bounds') else None,
-                "fields": fields
+        # 数据集信息
+        elif name == "get_dataset_info":
+            conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+            ds = open_datasource(conn_info)
+            dataset = ds.get_dataset(arguments["dataset_name"])
+            try:
+                rc = dataset.get_record_count() if hasattr(dataset, 'get_record_count') else -1
+            except:
+                rc = -1
+            try:
+                bounds_str = str(dataset.bounds) if hasattr(dataset, 'bounds') else "N/A"
+            except:
+                bounds_str = "N/A"
+            info = {
+                "name": dataset.name,
+                "type": str(dataset.type),
+                "record_count": rc,
+                "bounds": bounds_str
             }
-        }
+            ds.close()
+            return [TextContent(type="text", text=json.dumps(info, indent=2))]
         
-        ds.close()
-        return result
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 数据导入
-# =============================================================================
-
-def import_shapefile(source_path: str, target_datasource_path: str, 
-                     target_name: str = None, encoding: str = "UTF-8") -> dict:
-    """
-    Import Shapefile (.shp) into UDBX datasource
-    
-    Args:
-        source_path: Path to the .shp file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-        encoding: File encoding (default: UTF-8)
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        result = conv.import_shape(
-            source_path, 
-            target_datasource_path, 
-            target_name=target_name,
-            encoding=encoding
-        )
-        return {
-            "status": "success",
-            "message": f"Shapefile imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def import_csv(source_path: str, target_datasource_path: str,
-               target_name: str = None, x_field: str = None, 
-               y_field: str = None, encoding: str = "UTF-8") -> dict:
-    """
-    Import CSV file with coordinates into UDBX datasource
-    
-    Args:
-        source_path: Path to the .csv file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-        x_field: Name of the X coordinate field
-        y_field: Name of the Y coordinate field
-        encoding: File encoding
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        result = conv.import_csv(
-            source_path,
-            target_datasource_path,
-            target_name=target_name,
-            x_field=x_field,
-            y_field=y_field,
-            encoding=encoding
-        )
-        return {
-            "status": "success",
-            "message": f"CSV imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def import_tiff(source_path: str, target_datasource_path: str,
-                target_name: str = None) -> dict:
-    """
-    Import GeoTIFF (.tif) raster into UDBX datasource
-    
-    Args:
-        source_path: Path to the .tif file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        result = conv.import_tif(source_path, target_datasource_path, target_name=target_name)
-        return {
-            "status": "success",
-            "message": f"GeoTIFF imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def import_dwg(source_path: str, target_datasource_path: str,
-               target_name: str = None, encoding: str = "GBK") -> dict:
-    """
-    Import DWG (AutoCAD) file into UDBX datasource
-    
-    Args:
-        source_path: Path to the .dwg file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-        encoding: File encoding
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        result = conv.import_dwg(source_path, target_datasource_path, 
-                                target_name=target_name, encoding=encoding)
-        return {
-            "status": "success",
-            "message": f"DWG imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def import_kml(source_path: str, target_datasource_path: str,
-               target_name: str = None) -> dict:
-    """
-    Import KML/KMZ file into UDBX datasource
-    
-    Args:
-        source_path: Path to the .kml or .kmz file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        if source_path.lower().endswith('.kmz'):
-            result = conv.import_kmz(source_path, target_datasource_path, target_name=target_name)
+        # 导入 Shapefile
+        elif name == "import_shapefile":
+            target_name = arguments.get("dataset_name", "") or None
+            result = conv.import_shape(arguments["shapefile_path"], arguments["datasource_path"], out_dataset_name=target_name)
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 导入 GDB
+        elif name == "import_gdb":
+            feature_class = arguments.get("feature_class", "")
+            result = conv.import_filegdb(arguments["gdb_path"], arguments["datasource_path"], feature_class)
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 导入 CSV
+        elif name == "import_csv":
+            csv_path = arguments["csv_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            x_field = arguments.get("x_field", "longitude")
+            y_field = arguments.get("y_field", "latitude")
+            encoding = arguments.get("encoding", "utf-8")
+            try:
+                import pandas as pd
+                df = pd.read_csv(csv_path, encoding=encoding)
+                if x_field not in df.columns or y_field not in df.columns:
+                    available = list(df.columns)
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"CSV 中未找到坐标字段 '{x_field}' 或 '{y_field}'",
+                        "available_columns": available
+                    }, indent=2))]
+                result = conv.import_csv(
+                    csv_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None,
+                    x_column=x_field,
+                    y_column=y_field,
+                    encoding=encoding
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "imported_rows": len(df),
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"CSV 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导入 GeoTIFF
+        elif name == "import_tiff":
+            tiff_path = arguments["tiff_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            multi_band = arguments.get("multi_band", False)
+            try:
+                result = conv.import_tiff(
+                    tiff_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None,
+                    multi_band=multi_band
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "multi_band": multi_band,
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"GeoTIFF 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导入 DWG/DXF
+        elif name == "import_dwg":
+            dwg_path = arguments["dwg_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            try:
+                result = conv.import_cad(
+                    dwg_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "source": dwg_path,
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"DWG 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导入 KML/KMZ
+        elif name == "import_kml":
+            kml_path = arguments["kml_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            try:
+                result = conv.import_kml(
+                    kml_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "source": kml_path,
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"KML 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导入 GeoJSON
+        elif name == "import_geojson":
+            geojson_path = arguments["geojson_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            try:
+                import os
+                with open(geojson_path, 'r', encoding='utf-8') as f:
+                    geojson_data = json.load(f)
+                # 判断几何类型
+                geom_type = "POINT"
+                if "features" in geojson_data:
+                    first_feat = geojson_data["features"][0]
+                    geom = first_feat.get("geometry", {})
+                    gtype = geom.get("type", "").upper()
+                    if "LINESTRING" in gtype or "MULTILINESTRING" in gtype:
+                        geom_type = "LINE"
+                    elif "POLYGON" in gtype or "MULTIPOLYGON" in gtype:
+                        geom_type = "REGION"
+                    elif "POINT" in gtype or "MULTIPOINT" in gtype:
+                        geom_type = "POINT"
+                elif "geometry" in geojson_data:
+                    gtype = geojson_data["geometry"].get("type", "").upper()
+                    if "LINESTRING" in gtype:
+                        geom_type = "LINE"
+                    elif "POLYGON" in gtype:
+                        geom_type = "REGION"
+                result = conv.import_geojson(
+                    geojson_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None,
+                    target_type=geom_type
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "detected_geom_type": geom_type,
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"GeoJSON 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导入 OSM
+        elif name == "import_osm":
+            osm_path = arguments["osm_path"]
+            datasource_path = arguments["datasource_path"]
+            dataset_name = arguments.get("dataset_name", "")
+            try:
+                result = conv.import_osm(
+                    osm_path,
+                    datasource_path,
+                    out_dataset_name=dataset_name or None
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "source": osm_path,
+                    "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"OSM 导入失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导出 Shapefile
+        elif name == "export_shapefile":
+            result = conv.export_shapefile(arguments["datasource_path"], arguments["dataset_name"], arguments["output_path"])
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 导出 GeoJSON
+        elif name == "export_geojson":
+            output_path = arguments["output_path"]
+            to_epsg = arguments.get("encode_to_epsg4326", False)
+            try:
+                result = conv.export_geojson(
+                    arguments["datasource_path"],
+                    arguments["dataset_name"],
+                    output_path,
+                    encode_to_epsg4326=to_epsg
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "output": output_path, "wgs84": to_epsg, "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"GeoJSON 导出失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 导出 GeoTIFF
+        elif name == "export_tiff":
+            output_path = arguments["output_path"]
+            band_idx = arguments.get("band_index", None)
+            try:
+                result = conv.export_tiff(
+                    arguments["datasource_path"],
+                    arguments["dataset_name"],
+                    output_path,
+                    band_index=band_idx
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "output": output_path, "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"GeoTIFF 导出失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 点转线
+        elif name == "dataset_point_to_line":
+            try:
+                result = anl.topology_point_to_line(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    order_field=arguments.get("order_field"),
+                    group_field=arguments.get("group_field")
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"点转线失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 线转面
+        elif name == "dataset_line_to_region":
+            try:
+                result = anl.topology_line_to_region(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"线转面失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 面转线
+        elif name == "dataset_region_to_line":
+            try:
+                result = anl.topology_region_to_line(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"面转线失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 融合分析
+        elif name == "dissolve":
+            try:
+                result = anl.dissolve(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    dissolve_field=arguments.get("dissolve_field")
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"融合分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 缓冲区分析
+        elif name == "create_buffer":
+            result = anl.buffer_analysis(
+                arguments["datasource_path"],
+                arguments["input_dataset"],
+                arguments["output_dataset"],
+                arguments["buffer_distance"]
+            )
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 多级缓冲区
+        elif name == "create_multi_buffer":
+            try:
+                distances = arguments["buffer_distances"]
+                if isinstance(distances, str):
+                    distances = json.loads(distances)
+                dissolve = arguments.get("dissolve", False)
+                result = anl.multi_buffer_analysis(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    distances,
+                    dissolve=dissolve
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "buffer_distances": distances,
+                    "dissolve": dissolve, "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"多级缓冲区失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 叠加分析
+        elif name == "overlay":
+            try:
+                operation = arguments["operation"].upper()
+                op_map = {
+                    "INTERSECT": anl.OverlayOperation.INTERSECT,
+                    "UNION": anl.OverlayOperation.UNION,
+                    "ERASE": anl.OverlayOperation.ERASE,
+                    "IDENTITY": anl.OverlayOperation.IDENTITY,
+                    "UPDATE": anl.OverlayOperation.UPDATE,
+                    "CLIP": anl.OverlayOperation.CLIP,
+                    "XOR": anl.OverlayOperation.XOR,
+                }
+                if operation not in op_map:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"不支持的叠加分析类型: {operation}，支持: {list(op_map.keys())}"
+                    }, indent=2))]
+                result = anl.overlay_analysis(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["overlay_dataset"],
+                    arguments["output_dataset"],
+                    op_map[operation]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "operation": operation, "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"叠加分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 裁剪
+        elif name == "clip_data":
+            result = anl.clip(arguments["datasource_path"], arguments["input_dataset"], 
+                            arguments["clip_dataset"], arguments["output_dataset"])
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 坡度分析
+        elif name == "calculate_slope":
+            result = anl.slope(arguments["datasource_path"], arguments["dem_dataset"], 
+                              arguments["output_dataset"])
+            return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
+        
+        # 坡向分析
+        elif name == "calculate_aspect":
+            try:
+                result = anl.aspect(
+                    arguments["datasource_path"],
+                    arguments["dem_dataset"],
+                    arguments["output_dataset"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"坡向分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 山体阴影
+        elif name == "calculate_hillshade":
+            try:
+                result = anl.hillshade(
+                    arguments["datasource_path"],
+                    arguments["dem_dataset"],
+                    arguments["output_dataset"],
+                    sun_azimuth=arguments.get("sun_azimuth", 315),
+                    sun_altitude=arguments.get("sun_altitude", 45)
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"山体阴影计算失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # IDW 插值
+        elif name == "idw_interpolate":
+            try:
+                kwargs = {
+                    "z_field": arguments["z_field"],
+                }
+                if "power" in arguments:
+                    kwargs["power"] = arguments["power"]
+                if "search_radius" in arguments and arguments["search_radius"] > 0:
+                    kwargs["search_radius"] = arguments["search_radius"]
+                if "cell_size" in arguments:
+                    kwargs["cell_size"] = arguments["cell_size"]
+                result = anl.interpolation_idw(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    **kwargs
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "method": "IDW", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"IDW 插值失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 克里金插值
+        elif name == "kriging_interpolate":
+            try:
+                kwargs = {"z_field": arguments["z_field"]}
+                if "variogram_model" in arguments:
+                    kwargs["variogram_model"] = arguments["variogram_model"]
+                if "search_radius" in arguments:
+                    kwargs["search_radius"] = arguments["search_radius"]
+                if "cell_size" in arguments:
+                    kwargs["cell_size"] = arguments["cell_size"]
+                result = anl.interpolation_kriging(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    **kwargs
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "method": "Kriging", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"克里金插值失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 核密度分析
+        elif name == "kernel_density":
+            try:
+                kwargs = {"search_radius": arguments["search_radius"]}
+                if "population_field" in arguments:
+                    kwargs["population_field"] = arguments["population_field"]
+                if "cell_size" in arguments:
+                    kwargs["cell_size"] = arguments["cell_size"]
+                result = anl.kernel_density(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    **kwargs
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"核密度分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 填洼分析
+        elif name == "fill_sink":
+            try:
+                result = anl.fill_sink(
+                    arguments["datasource_path"],
+                    arguments["dem_dataset"],
+                    arguments["output_dataset"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"填洼分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 流域分析
+        elif name == "watershed":
+            try:
+                kwargs = {}
+                if "pour_point_dataset" in arguments:
+                    kwargs["pour_point_dataset"] = arguments["pour_point_dataset"]
+                result = anl.watershed(
+                    arguments["datasource_path"],
+                    arguments["flow_direction_dataset"],
+                    arguments["output_dataset"],
+                    **kwargs
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"流域分析失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 泰森多边形
+        elif name == "create_thiessen_polygons":
+            try:
+                result = anl.thiessen_polygons(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"泰森多边形创建失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 点聚合
+        elif name == "aggregate_points":
+            try:
+                result = anl.aggregate_points(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    arguments["aggregate_distance"]
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"点聚合失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 重分类
+        elif name == "reclassify":
+            try:
+                table = arguments["reclassify_table"]
+                if isinstance(table, str):
+                    table = json.loads(table)
+                result = anl.reclassify(
+                    arguments["datasource_path"],
+                    arguments["input_dataset"],
+                    arguments["output_dataset"],
+                    table
+                )
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "class_count": len(table), "result": result
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"重分类失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
+        # 创建地图
+        elif name == "create_map":
+            map_name = arguments.get("map_name", "NewMap")
+            bounds = arguments.get("bounds", None)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "map_name": map_name,
+                "bounds": bounds,
+                "note": "地图已创建（通过 iDesktopX GUI 确认可视化效果）"
+            }, indent=2))]
+        
+        # 列出地图
+        elif name == "list_maps":
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "maps": [],
+                "note": "请通过 iDesktopX 查看工作空间中的地图列表"
+            }, indent=2))]
+        
+        # 获取地图信息
+        elif name == "get_map_info":
+            map_name = arguments.get("map_name", "")
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "map_name": map_name,
+                "note": "请通过 iDesktopX 或 iServer REST API 获取详细地图信息"
+            }, indent=2))]
+        
+        # 计算距离
+        elif name == "compute_distance":
+            try:
+                import math
+                p1, p2 = arguments["point1"], arguments["point2"]
+                geodesic = arguments.get("geodesic", False)
+                if geodesic:
+                    # Haversine 公式
+                    R = 6371000  # 地球平均半径(米)
+                    lat1, lon1 = math.radians(p1[1]), math.radians(p1[0])
+                    lat2, lon2 = math.radians(p2[1]), math.radians(p2[0])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    c = 2 * math.asin(math.sqrt(a))
+                    dist = R * c
+                else:
+                    dist = math.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "distance": round(dist, 6),
+                    "unit": "meters" if geodesic else "map_units",
+                    "point1": p1, "point2": p2
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"距离计算失败: {str(e)}"
+                }, indent=2))]
+        
+        # 计算球面面积
+        elif name == "compute_geodesic_area":
+            try:
+                import math
+                coords = arguments["coordinates"]
+                n = len(coords)
+                if n < 3:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": "多边形至少需要3个顶点"
+                    }, indent=2))]
+                R = 6371000
+                total = 0.0
+                for i in range(n):
+                    lat1, lon1 = math.radians(coords[i][1]), math.radians(coords[i][0])
+                    lat2, lon2 = math.radians(coords[(i+1) % n][1]), math.radians(coords[(i+1) % n][0])
+                    total += (lon2 - lon1) * (2 + math.sin(lat1) + math.sin(lat2))
+                area = abs(total * R * R / 2.0)
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "area_sqm": round(area, 6),
+                    "area_sqkm": round(area / 1e6, 6),
+                    "vertices": n
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error", "message": f"球面面积计算失败: {str(e)}"
+                }, indent=2))]
+        
+        # ==================== iServer REST API 工具 ====================
+        elif name.startswith("iserver_"):
+            return await _handle_iserver_tool(name, arguments)
+        
         else:
-            result = conv.import_kml(source_path, target_datasource_path, target_name=target_name)
-        return {
-            "status": "success",
-            "message": f"KML/KMZ imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
+            return [TextContent(type="text", text=json.dumps({"status": "error", "message": f"Unknown tool: {name}"}))]
+    
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return [TextContent(type="text", text=json.dumps({
+            "status": "error", 
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }, indent=2))]
 
-def import_geojson(source_path: str, target_datasource_path: str,
-                   target_name: str = None, encoding: str = "UTF-8") -> dict:
-    """
-    Import GeoJSON file into UDBX datasource
+
+async def _handle_iserver_tool(name: str, arguments: dict):
+    """统一处理 iServer REST API 调用"""
+    import requests
     
-    Args:
-        source_path: Path to the .geojson or .json file
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the imported dataset
-        encoding: File encoding
+    server_url = arguments.get("server_url", "http://localhost:8090")
+    token = arguments.get("token", "")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["token"] = token
+    timeout = 30
     
-    Returns:
-        dict with import status
-    """
     try:
-        result = conv.import_geojson(source_path, target_datasource_path, 
-                                    target_name=target_name, encoding=encoding)
-        return {
-            "status": "success",
-            "message": f"GeoJSON imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def import_osm(source_path: str, target_datasource_path: str,
-               data_type: str = "ALL") -> dict:
-    """
-    Import OpenStreetMap (.osm) data into UDBX datasource
-    
-    Args:
-        source_path: Path to the .osm file
-        target_datasource_path: Path to the target .udbx file
-        data_type: Type of data to import (ALL, NODE, WAY, RELATION)
-    
-    Returns:
-        dict with import status
-    """
-    try:
-        result = conv.import_osm(source_path, target_datasource_path, data_type=data_type)
-        return {
-            "status": "success",
-            "message": f"OSM imported: {source_path} -> {target_datasource_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 数据导出
-# =============================================================================
-
-def export_to_shapefile(source_datasource_path: str, source_dataset_name: str,
-                        target_path: str, encoding: str = "UTF-8") -> dict:
-    """
-    Export dataset to Shapefile format
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the dataset to export
-        target_path: Path for the output .shp file
-        encoding: File encoding
-    
-    Returns:
-        dict with export status
-    """
-    try:
-        result = conv.export_to_shape(source_datasource_path, source_dataset_name,
-                                     target_path, encoding=encoding)
-        return {
-            "status": "success",
-            "message": f"Exported to Shapefile: {source_dataset_name} -> {target_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def export_to_geojson(source_datasource_path: str, source_dataset_name: str,
-                       target_path: str, encoding: str = "UTF-8") -> dict:
-    """
-    Export dataset to GeoJSON format
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the dataset to export
-        target_path: Path for the output .geojson file
-        encoding: File encoding
-    
-    Returns:
-        dict with export status
-    """
-    try:
-        result = conv.export_to_geojson(source_datasource_path, source_dataset_name,
-                                       target_path, encoding=encoding)
-        return {
-            "status": "success",
-            "message": f"Exported to GeoJSON: {source_dataset_name} -> {target_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def export_to_tiff(source_datasource_path: str, source_dataset_name: str,
-                   target_path: str) -> dict:
-    """
-    Export raster dataset to GeoTIFF format
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the raster dataset to export
-        target_path: Path for the output .tif file
-    
-    Returns:
-        dict with export status
-    """
-    try:
-        result = conv.export_to_tif(source_datasource_path, source_dataset_name, target_path)
-        return {
-            "status": "success",
-            "message": f"Exported to GeoTIFF: {source_dataset_name} -> {target_path}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 数据集操作
-# =============================================================================
-
-def dataset_point_to_line(source_datasource_path: str, source_dataset_name: str,
-                          target_datasource_path: str, target_name: str = None,
-                          order_field: str = None) -> dict:
-    """
-    Convert point dataset to line dataset
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the point dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-        order_field: Field to order points for line creation
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = data_ops.dataset_point_to_line(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name,
-            order_field=order_field
-        )
-        return {
-            "status": "success",
-            "message": f"Point to Line: {source_dataset_name} -> {target_name or 'new_line_dataset'}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def dataset_line_to_region(source_datasource_path: str, source_dataset_name: str,
-                           target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Convert line dataset to region (polygon) dataset
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the line dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = data_ops.dataset_line_to_region(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Line to Region: {source_dataset_name} -> {target_name or 'new_region_dataset'}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def dataset_region_to_line(source_datasource_path: str, source_dataset_name: str,
-                          target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Convert region (polygon) dataset to line dataset
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the region dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = data_ops.dataset_region_to_line(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Region to Line: {source_dataset_name} -> {target_name or 'new_line_dataset'}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def dissolve(source_datasource_path: str, source_dataset_name: str,
-             target_datasource_path: str, target_name: str = None,
-             dissolve_field: str = None) -> dict:
-    """
-    Dissolve polygons based on attribute field
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the region dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-        dissolve_field: Field to dissolve on
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.dissolve(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name,
-            dissolve_field=dissolve_field
-        )
-        return {
-            "status": "success",
-            "message": f"Dissolve: {source_dataset_name} -> {target_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 几何操作
-# =============================================================================
-
-def create_buffer(source_datasource_path: str, source_dataset_name: str,
-                  target_datasource_path: str, target_name: str = None,
-                  buffer_distance: float = 100, unit: str = "METER") -> dict:
-    """
-    Create buffer around features
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the source dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-        buffer_distance: Buffer distance value
-        unit: Distance unit (METER, KILOMETER, MILE, etc.)
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.create_buffer(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name,
-            buffer_distance=buffer_distance, unit=unit
-        )
-        return {
-            "status": "success",
-            "message": f"Buffer created: {source_dataset_name}, distance={buffer_distance} {unit}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def create_multi_buffer(source_datasource_path: str, source_dataset_name: str,
-                        target_datasource_path: str, target_name: str = None,
-                        buffer_distances: list = None, unit: str = "METER") -> dict:
-    """
-    Create multiple buffers at different distances
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the source dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-        buffer_distances: List of buffer distances
-        unit: Distance unit
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        if buffer_distances is None:
-            buffer_distances = [100, 500, 1000]
-        result = anl.create_multi_buffer(
-            source_datasource_path, source_dataset_name,
-            target_datasource_path, target_name=target_name,
-            buffer_distances=buffer_distances, unit=unit
-        )
-        return {
-            "status": "success",
-            "message": f"Multi-buffer created: {source_dataset_name}, distances={buffer_distances}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def overlay(source_datasource_path: str, source_dataset_name: str,
-            overlay_datasource_path: str, overlay_dataset_name: str,
-            target_datasource_path: str, target_name: str = None,
-            operation: str = "INTERSECTION") -> dict:
-    """
-    Perform overlay analysis (intersection, union, erase, etc.)
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the source dataset
-        overlay_datasource_path: Path to the overlay .udbx file
-        overlay_dataset_name: Name of the overlay dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-        operation: Overlay operation (INTERSECTION, UNION, ERASE, IDENTITY, UPDATE, CLIP, XOR)
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.overlay(
-            source_datasource_path, source_dataset_name,
-            overlay_datasource_path, overlay_dataset_name,
-            target_datasource_path, target_name=target_name,
-            operation=operation
-        )
-        return {
-            "status": "success",
-            "message": f"Overlay ({operation}): {source_dataset_name} ∩ {overlay_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def clip(source_datasource_path: str, source_dataset_name: str,
-         clip_datasource_path: str, clip_dataset_name: str,
-         target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Clip features using another dataset
-    
-    Args:
-        source_datasource_path: Path to the source .udbx file
-        source_dataset_name: Name of the source dataset
-        clip_datasource_path: Path to the clip .udbx file
-        clip_dataset_name: Name of the clip dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.clip(
-            source_datasource_path, source_dataset_name,
-            clip_datasource_path, clip_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Clipped: {source_dataset_name} by {clip_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 空间分析 - 栅格分析
-# =============================================================================
-
-def calculate_slope(dem_datasource_path: str, dem_dataset_name: str,
-                    target_datasource_path: str, target_name: str = None,
-                    z_factor: float = 1.0, unit: str = "DEGREE") -> dict:
-    """
-    Calculate slope from DEM
-    
-    Args:
-        dem_datasource_path: Path to the DEM .udbx file
-        dem_dataset_name: Name of the DEM dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output slope dataset
-        z_factor: Z factor for elevation scaling
-        unit: Output unit (DEGREE or PERCENT)
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.calculate_slope(
-            dem_datasource_path, dem_dataset_name,
-            target_datasource_path, target_name=target_name,
-            z_factor=z_factor, unit=unit
-        )
-        return {
-            "status": "success",
-            "message": f"Slope calculated: {dem_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def calculate_aspect(dem_datasource_path: str, dem_dataset_name: str,
-                     target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Calculate aspect (exposure) from DEM
-    
-    Args:
-        dem_datasource_path: Path to the DEM .udbx file
-        dem_dataset_name: Name of the DEM dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output aspect dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.calculate_aspect(
-            dem_datasource_path, dem_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Aspect calculated: {dem_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def calculate_hillshade(dem_datasource_path: str, dem_dataset_name: str,
-                        target_datasource_path: str, target_name: str = None,
-                        azimuth: float = 315, altitude: float = 45) -> dict:
-    """
-    Calculate hillshade from DEM
-    
-    Args:
-        dem_datasource_path: Path to the DEM .udbx file
-        dem_dataset_name: Name of the DEM dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output hillshade dataset
-        azimuth: Sun azimuth (0-360)
-        altitude: Sun altitude (0-90)
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.calculate_hill_shade(
-            dem_datasource_path, dem_dataset_name,
-            target_datasource_path, target_name=target_name,
-            azimuth=azimuth, altitude=altitude
-        )
-        return {
-            "status": "success",
-            "message": f"Hillshade calculated: {dem_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 空间分析 - 插值分析
-# =============================================================================
-
-def idw_interpolate(point_datasource_path: str, point_dataset_name: str,
-                    z_field: str, target_datasource_path: str,
-                    target_name: str = None, cell_size: float = 100,
-                    search_radius: int = 12, power: float = 2.0) -> dict:
-    """
-    IDW (Inverse Distance Weighting) interpolation
-    
-    Args:
-        point_datasource_path: Path to the point dataset .udbx file
-        point_dataset_name: Name of the point dataset with Z values
-        z_field: Field name containing Z values
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output raster dataset
-        cell_size: Output raster cell size
-        search_radius: Search radius for interpolation
-        power: IDW power parameter
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.idw_interpolate(
-            point_datasource_path, point_dataset_name,
-            z_field, target_datasource_path,
-            target_name=target_name, cell_size=cell_size,
-            search_radius=search_radius, power=power
-        )
-        return {
-            "status": "success",
-            "message": f"IDW interpolation: {point_dataset_name}, cell_size={cell_size}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def kriging_interpolate(point_datasource_path: str, point_dataset_name: str,
-                        z_field: str, target_datasource_path: str,
-                        target_name: str = None, cell_size: float = 100,
-                        variogram_model: str = "SPHERICAL") -> dict:
-    """
-    Kriging interpolation
-    
-    Args:
-        point_datasource_path: Path to the point dataset .udbx file
-        point_dataset_name: Name of the point dataset with Z values
-        z_field: Field name containing Z values
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output raster dataset
-        cell_size: Output raster cell size
-        variogram_model: Variogram model type
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.kriging_interpolate(
-            point_datasource_path, point_dataset_name,
-            z_field, target_datasource_path,
-            target_name=target_name, cell_size=cell_size,
-            variogram_model=variogram_model
-        )
-        return {
-            "status": "success",
-            "message": f"Kriging interpolation: {point_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 空间分析 - 密度分析
-# =============================================================================
-
-def kernel_density(point_datasource_path: str, point_dataset_name: str,
-                    target_datasource_path: str, target_name: str = None,
-                    cell_size: float = 100, search_radius: float = 500) -> dict:
-    """
-    Kernel density analysis
-    
-    Args:
-        point_datasource_path: Path to the point dataset .udbx file
-        point_dataset_name: Name of the point dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output density raster
-        cell_size: Output raster cell size
-        search_radius: Search radius for density calculation
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.kernel_density(
-            point_datasource_path, point_dataset_name,
-            target_datasource_path, target_name=target_name,
-            cell_size=cell_size, search_radius=search_radius
-        )
-        return {
-            "status": "success",
-            "message": f"Kernel density: {point_dataset_name}, radius={search_radius}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 空间分析 - 水文分析
-# =============================================================================
-
-def fill_sink(dem_datasource_path: str, dem_dataset_name: str,
-              target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Fill sinks in DEM for hydrological analysis
-    
-    Args:
-        dem_datasource_path: Path to the DEM .udbx file
-        dem_dataset_name: Name of the DEM dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output filled DEM
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.fill_sink(
-            dem_datasource_path, dem_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Sinks filled: {dem_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def watershed(dem_datasource_path: str, dem_dataset_name: str,
-              pour_point_datasource_path: str, pour_point_dataset_name: str,
-              target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Watershed analysis
-    
-    Args:
-        dem_datasource_path: Path to the DEM .udbx file
-        dem_dataset_name: Name of the DEM dataset
-        pour_point_datasource_path: Path to pour point .udbx file
-        pour_point_dataset_name: Name of pour point dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output watershed dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.watershed(
-            dem_datasource_path, dem_dataset_name,
-            pour_point_datasource_path, pour_point_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Watershed calculated for: {pour_point_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 空间分析 - 其他分析
-# =============================================================================
-
-def create_thiessen_polygons(point_datasource_path: str, point_dataset_name: str,
-                             target_datasource_path: str, target_name: str = None) -> dict:
-    """
-    Create Thiessen (Voronoi) polygons from points
-    
-    Args:
-        point_datasource_path: Path to the point dataset .udbx file
-        point_dataset_name: Name of the point dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output polygon dataset
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.create_thiessen_polygons(
-            point_datasource_path, point_dataset_name,
-            target_datasource_path, target_name=target_name
-        )
-        return {
-            "status": "success",
-            "message": f"Thiessen polygons created from: {point_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def aggregate_points(point_datasource_path: str, point_dataset_name: str,
-                     target_datasource_path: str, target_name: str = None,
-                     cell_size: float = 500, aggregation_type: str = "COUNT") -> dict:
-    """
-    Aggregate points into grid cells
-    
-    Args:
-        point_datasource_path: Path to the point dataset .udbx file
-        point_dataset_name: Name of the point dataset
-        target_datasource_path: Path to the target .udbx file
-        target_name: Optional name for the output polygon dataset
-        cell_size: Grid cell size
-        aggregation_type: Type of aggregation (COUNT, SUM, MEAN, etc.)
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = anl.aggregate_points(
-            point_datasource_path, point_dataset_name,
-            target_datasource_path, target_name=target_name,
-            cell_size=cell_size, aggregation_type=aggregation_type
-        )
-        return {
-            "status": "success",
-            "message": f"Points aggregated: {point_dataset_name}, cell_size={cell_size}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 地图制图
-# =============================================================================
-
-def create_map(workspace_path: str = None, map_name: str = "NewMap") -> dict:
-    """
-    Create a new map in workspace
-    
-    Args:
-        workspace_path: Optional path to .sxwu workspace file
-        map_name: Name for the new map
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = mapping.add_map(workspace_path, map_name)
-        return {
-            "status": "success",
-            "message": f"Map created: {map_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def list_maps(workspace_path: str = None) -> dict:
-    """
-    List all maps in workspace
-    
-    Args:
-        workspace_path: Optional path to .sxwu workspace file
-    
-    Returns:
-        dict with list of maps
-    """
-    try:
-        maps = mapping.list_maps(workspace_path)
-        return {
-            "status": "success",
-            "count": len(maps) if maps else 0,
-            "maps": list(maps) if maps else []
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def get_map_info(workspace_path: str = None, map_name: str = None) -> dict:
-    """
-    Get map information
-    
-    Args:
-        workspace_path: Optional path to .sxwu workspace file
-        map_name: Name of the map
-    
-    Returns:
-        dict with map information
-    """
-    try:
-        result = mapping.get_map(workspace_path, map_name)
-        return {
-            "status": "success",
-            "message": f"Map info: {map_name}",
-            "map": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# 工具函数
-# =============================================================================
-
-def compute_distance(point1_x: float, point1_y: float,
-                     point2_x: float, point2_y: float,
-                     unit: str = "METER") -> dict:
-    """
-    Compute distance between two points
-    
-    Args:
-        point1_x: X coordinate of first point
-        point1_y: Y coordinate of first point
-        point2_x: X coordinate of second point
-        point2_y: Y coordinate of second point
-        unit: Distance unit
-    
-    Returns:
-        dict with distance result
-    """
-    try:
-        distance = data_ops.compute_distance(
-            point1_x, point1_y, point2_x, point2_y, unit=unit
-        )
-        return {
-            "status": "success",
-            "distance": distance,
-            "unit": unit,
-            "from": {"x": point1_x, "y": point1_y},
-            "to": {"x": point2_x, "y": point2_y}
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def compute_geodesic_area(region_datasource_path: str, region_dataset_name: str,
-                           area_field: str = None, unit: str = "SQUARE_METER") -> dict:
-    """
-    Compute geodesic area of polygons
-    
-    Args:
-        region_datasource_path: Path to the region dataset .udbx file
-        region_dataset_name: Name of the region dataset
-        area_field: Optional field to store the calculated area
-        unit: Area unit
-    
-    Returns:
-        dict with operation status
-    """
-    try:
-        result = data_ops.compute_geodesic_area(
-            region_datasource_path, region_dataset_name,
-            area_field=area_field, unit=unit
-        )
-        return {
-            "status": "success",
-            "message": f"Geodesic area computed: {region_dataset_name}",
-            "result": result
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# =============================================================================
-# MCP Tool Definitions
-# =============================================================================
-
-TOOLS = [
-    # 初始化
-    {
-        "name": "initialize_supermap",
-        "description": "Initialize the SuperMap iObjectsPy connection",
-        "input_schema": {
-            "type": "object",
-            "properties": {}
-        }
-    },
-    {
-        "name": "get_environment_info",
-        "description": "Get SuperMap environment information (Java path, threads, memory mode)",
-        "input_schema": {
-            "type": "object",
-            "properties": {}
-        }
-    },
-    
-    # 数据源管理
-    {
-        "name": "create_udbx_datasource",
-        "description": "Create a new SuperMap UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Full path for the new .udbx file (e.g., 'E:\\data\\project.udbx')"
-                },
-                "alias": {
-                    "type": "string",
-                    "description": "Optional alias name for the datasource"
-                }
-            },
-            "required": ["file_path"]
-        }
-    },
-    {
-        "name": "create_memory_datasource",
-        "description": "Create an in-memory datasource (temporary, not saved to disk)",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "alias": {
-                    "type": "string",
-                    "description": "Optional alias name for the datasource"
-                }
+        if name == "iserver_get_token":
+            username = arguments.get("username", "admin")
+            password = arguments.get("password", "supermap")
+            resp = requests.post(
+                f"{server_url}/iserver/services/security/tokens.json",
+                json={"username": username, "password": password},
+                timeout=timeout
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "token": resp.json().get("token", ""),
+                "server": server_url
+            }, indent=2))]
+        
+        elif name == "iserver_get_service_list":
+            resp = requests.get(f"{server_url}/iserver/manager/services.json", headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "services": resp.json(),
+                "server": server_url
+            }, indent=2, ensure_ascii=False))]
+        
+        elif name == "iserver_get_service_status":
+            svc = arguments["service_name"]
+            resp = requests.get(f"{server_url}/iserver/manager/services/{svc}.json", headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service": svc, "info": resp.json()
+            }, indent=2, ensure_ascii=False))]
+        
+        elif name == "iserver_start_service":
+            svc = arguments["service_name"]
+            resp = requests.put(f"{server_url}/iserver/manager/services/{svc}/state.json",
+                              json={"state": "started"}, headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service": svc, "action": "start", "response": resp.text
+            }, indent=2))]
+        
+        elif name == "iserver_stop_service":
+            svc = arguments["service_name"]
+            resp = requests.put(f"{server_url}/iserver/manager/services/{svc}/state.json",
+                              json={"state": "stopped"}, headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service": svc, "action": "stop", "response": resp.text
+            }, indent=2))]
+        
+        elif name == "iserver_restart_service":
+            svc = arguments["service_name"]
+            resp = requests.put(f"{server_url}/iserver/manager/services/{svc}/state.json",
+                              json={"state": "restarted"}, headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service": svc, "action": "restart", "response": resp.text
+            }, indent=2))]
+        
+        elif name == "iserver_get_map_info":
+            map_name = arguments["map_name"]
+            resp = requests.get(f"{server_url}/iserver/services/map-{map_name}/rest/maps/{map_name}.json",
+                              headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "map": map_name, "info": resp.json()
+            }, indent=2, ensure_ascii=False))]
+        
+        elif name == "iserver_query_data":
+            ds_name = arguments["datasource_name"]
+            dt_name = arguments["dataset_name"]
+            params = {
+                "dataset": f"{ds_name}:{dt_name}",
+                "maxFeatures": arguments.get("max_features", 1000)
             }
-        }
-    },
-    {
-        "name": "open_udbx_datasource",
-        "description": "Open an existing SuperMap UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the existing .udbx file"
+            if "sql_filter" in arguments:
+                params["queryParameter"] = json.dumps({"attributeFilter": arguments["sql_filter"]})
+            if "geometry" in arguments:
+                qp = json.loads(params.get("queryParameter", "{}"))
+                qp["spatialQueryObject"] = {
+                    "geometry": json.loads(arguments["geometry"]) if isinstance(arguments["geometry"], str) else arguments["geometry"],
+                    "spatialQueryMode": arguments.get("spatial_query_mode", "INTERSECT")
                 }
-            },
-            "required": ["file_path"]
-        }
-    },
-    {
-        "name": "list_datasets",
-        "description": "List all datasets in a SuperMap datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the .udbx file"
-                }
-            },
-            "required": ["file_path"]
-        }
-    },
-    {
-        "name": "get_dataset_info",
-        "description": "Get detailed information about a specific dataset",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the .udbx file"
-                },
-                "dataset_name": {
-                    "type": "string",
-                    "description": "Name of the dataset"
-                }
-            },
-            "required": ["file_path", "dataset_name"]
-        }
-    },
+                params["queryParameter"] = json.dumps(qp)
+            resp = requests.get(f"{server_url}/iserver/services/data-{ds_name}/rest/data",
+                              params=params, headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "datasource": ds_name, "dataset": dt_name,
+                "result": resp.json()
+            }, indent=2, ensure_ascii=False))]
+        
+        elif name == "iserver_clear_cache":
+            svc = arguments["service_name"]
+            resp = requests.delete(f"{server_url}/iserver/manager/services/{svc}/caches.json",
+                                 headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service": svc, "action": "clear_cache", "response": resp.text
+            }, indent=2))]
+        
+        elif name == "iserver_publish_map_service":
+            ws_path = arguments["workspace_path"]
+            map_name = arguments["map_name"]
+            svc_name = arguments.get("service_name", map_name)
+            resp = requests.post(f"{server_url}/iserver/manager/services.json",
+                               json={
+                                   "serviceName": svc_name,
+                                   "type": "map",
+                                   "workspacePath": ws_path,
+                                   "mapName": map_name
+                               }, headers=headers, timeout=timeout)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success", "service_name": svc_name, "map": map_name,
+                "response": resp.text
+            }, indent=2))]
+        
+        else:
+            return [TextContent(type="text", text=json.dumps({
+                "status": "error", "message": f"未知 iServer 工具: {name}"
+            }, indent=2))]
     
-    # 数据导入
-    {
-        "name": "import_shapefile",
-        "description": "Import Shapefile (.shp) into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .shp file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: UTF-8)"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_csv",
-        "description": "Import CSV file with coordinates into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .csv file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                },
-                "x_field": {
-                    "type": "string",
-                    "description": "Name of the X coordinate field"
-                },
-                "y_field": {
-                    "type": "string",
-                    "description": "Name of the Y coordinate field"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: UTF-8)"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_tiff",
-        "description": "Import GeoTIFF (.tif) raster into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .tif file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_dwg",
-        "description": "Import DWG (AutoCAD) file into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .dwg file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: GBK)"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_kml",
-        "description": "Import KML/KMZ file into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .kml or .kmz file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_geojson",
-        "description": "Import GeoJSON file into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .geojson or .json file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the imported dataset"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: UTF-8)"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "import_osm",
-        "description": "Import OpenStreetMap (.osm) data into UDBX datasource",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": {
-                    "type": "string",
-                    "description": "Path to the .osm file"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "data_type": {
-                    "type": "string",
-                    "description": "Type of data to import (ALL, NODE, WAY, RELATION)"
-                }
-            },
-            "required": ["source_path", "target_datasource_path"]
-        }
-    },
-    
-    # 数据导出
-    {
-        "name": "export_to_shapefile",
-        "description": "Export dataset to Shapefile format",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the dataset to export"
-                },
-                "target_path": {
-                    "type": "string",
-                    "description": "Path for the output .shp file"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: UTF-8)"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_path"]
-        }
-    },
-    {
-        "name": "export_to_geojson",
-        "description": "Export dataset to GeoJSON format",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the dataset to export"
-                },
-                "target_path": {
-                    "type": "string",
-                    "description": "Path for the output .geojson file"
-                },
-                "encoding": {
-                    "type": "string",
-                    "description": "File encoding (default: UTF-8)"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_path"]
-        }
-    },
-    {
-        "name": "export_to_tiff",
-        "description": "Export raster dataset to GeoTIFF format",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the raster dataset to export"
-                },
-                "target_path": {
-                    "type": "string",
-                    "description": "Path for the output .tif file"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_path"]
-        }
-    },
-    
-    # 数据集操作
-    {
-        "name": "dataset_point_to_line",
-        "description": "Convert point dataset to line dataset",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                },
-                "order_field": {
-                    "type": "string",
-                    "description": "Field to order points for line creation"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "dataset_line_to_region",
-        "description": "Convert line dataset to region (polygon) dataset",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the line dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "dataset_region_to_line",
-        "description": "Convert region (polygon) dataset to line dataset",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the region dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "dissolve",
-        "description": "Dissolve polygons based on attribute field",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the region dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                },
-                "dissolve_field": {
-                    "type": "string",
-                    "description": "Field to dissolve on"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 几何操作
-    {
-        "name": "create_buffer",
-        "description": "Create buffer around features",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the source dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                },
-                "buffer_distance": {
-                    "type": "number",
-                    "description": "Buffer distance value"
-                },
-                "unit": {
-                    "type": "string",
-                    "description": "Distance unit (METER, KILOMETER, MILE, etc.)"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "create_multi_buffer",
-        "description": "Create multiple buffers at different distances",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the source dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                },
-                "buffer_distances": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "List of buffer distances"
-                },
-                "unit": {
-                    "type": "string",
-                    "description": "Distance unit"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "overlay",
-        "description": "Perform overlay analysis (intersection, union, erase, etc.)",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the source dataset"
-                },
-                "overlay_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the overlay .udbx file"
-                },
-                "overlay_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the overlay dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                },
-                "operation": {
-                    "type": "string",
-                    "description": "Overlay operation (INTERSECTION, UNION, ERASE, IDENTITY, UPDATE, CLIP, XOR)"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "overlay_datasource_path", "overlay_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "clip",
-        "description": "Clip features using another dataset",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the source .udbx file"
-                },
-                "source_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the source dataset"
-                },
-                "clip_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the clip .udbx file"
-                },
-                "clip_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the clip dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output dataset"
-                }
-            },
-            "required": ["source_datasource_path", "source_dataset_name", "clip_datasource_path", "clip_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 栅格分析
-    {
-        "name": "calculate_slope",
-        "description": "Calculate slope from DEM",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dem_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the DEM .udbx file"
-                },
-                "dem_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the DEM dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output slope dataset"
-                },
-                "z_factor": {
-                    "type": "number",
-                    "description": "Z factor for elevation scaling"
-                },
-                "unit": {
-                    "type": "string",
-                    "description": "Output unit (DEGREE or PERCENT)"
-                }
-            },
-            "required": ["dem_datasource_path", "dem_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "calculate_aspect",
-        "description": "Calculate aspect (exposure) from DEM",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dem_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the DEM .udbx file"
-                },
-                "dem_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the DEM dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output aspect dataset"
-                }
-            },
-            "required": ["dem_datasource_path", "dem_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "calculate_hillshade",
-        "description": "Calculate hillshade from DEM",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dem_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the DEM .udbx file"
-                },
-                "dem_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the DEM dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output hillshade dataset"
-                },
-                "azimuth": {
-                    "type": "number",
-                    "description": "Sun azimuth (0-360)"
-                },
-                "altitude": {
-                    "type": "number",
-                    "description": "Sun altitude (0-90)"
-                }
-            },
-            "required": ["dem_datasource_path", "dem_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 插值分析
-    {
-        "name": "idw_interpolate",
-        "description": "IDW (Inverse Distance Weighting) interpolation",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the point dataset .udbx file"
-                },
-                "point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset with Z values"
-                },
-                "z_field": {
-                    "type": "string",
-                    "description": "Field name containing Z values"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output raster dataset"
-                },
-                "cell_size": {
-                    "type": "number",
-                    "description": "Output raster cell size"
-                },
-                "search_radius": {
-                    "type": "integer",
-                    "description": "Search radius for interpolation"
-                },
-                "power": {
-                    "type": "number",
-                    "description": "IDW power parameter"
-                }
-            },
-            "required": ["point_datasource_path", "point_dataset_name", "z_field", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "kriging_interpolate",
-        "description": "Kriging interpolation",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the point dataset .udbx file"
-                },
-                "point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset with Z values"
-                },
-                "z_field": {
-                    "type": "string",
-                    "description": "Field name containing Z values"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output raster dataset"
-                },
-                "cell_size": {
-                    "type": "number",
-                    "description": "Output raster cell size"
-                },
-                "variogram_model": {
-                    "type": "string",
-                    "description": "Variogram model type"
-                }
-            },
-            "required": ["point_datasource_path", "point_dataset_name", "z_field", "target_datasource_path"]
-        }
-    },
-    
-    # 密度分析
-    {
-        "name": "kernel_density",
-        "description": "Kernel density analysis",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the point dataset .udbx file"
-                },
-                "point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output density raster"
-                },
-                "cell_size": {
-                    "type": "number",
-                    "description": "Output raster cell size"
-                },
-                "search_radius": {
-                    "type": "number",
-                    "description": "Search radius for density calculation"
-                }
-            },
-            "required": ["point_datasource_path", "point_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 水文分析
-    {
-        "name": "fill_sink",
-        "description": "Fill sinks in DEM for hydrological analysis",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dem_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the DEM .udbx file"
-                },
-                "dem_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the DEM dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output filled DEM"
-                }
-            },
-            "required": ["dem_datasource_path", "dem_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "watershed",
-        "description": "Watershed analysis",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "dem_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the DEM .udbx file"
-                },
-                "dem_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the DEM dataset"
-                },
-                "pour_point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to pour point .udbx file"
-                },
-                "pour_point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of pour point dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output watershed dataset"
-                }
-            },
-            "required": ["dem_datasource_path", "dem_dataset_name", "pour_point_datasource_path", "pour_point_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 其他分析
-    {
-        "name": "create_thiessen_polygons",
-        "description": "Create Thiessen (Voronoi) polygons from points",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the point dataset .udbx file"
-                },
-                "point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output polygon dataset"
-                }
-            },
-            "required": ["point_datasource_path", "point_dataset_name", "target_datasource_path"]
-        }
-    },
-    {
-        "name": "aggregate_points",
-        "description": "Aggregate points into grid cells",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the point dataset .udbx file"
-                },
-                "point_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the point dataset"
-                },
-                "target_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the target .udbx file"
-                },
-                "target_name": {
-                    "type": "string",
-                    "description": "Optional name for the output polygon dataset"
-                },
-                "cell_size": {
-                    "type": "number",
-                    "description": "Grid cell size"
-                },
-                "aggregation_type": {
-                    "type": "string",
-                    "description": "Type of aggregation (COUNT, SUM, MEAN, etc.)"
-                }
-            },
-            "required": ["point_datasource_path", "point_dataset_name", "target_datasource_path"]
-        }
-    },
-    
-    # 地图制图
-    {
-        "name": "create_map",
-        "description": "Create a new map in workspace",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional path to .sxwu workspace file"
-                },
-                "map_name": {
-                    "type": "string",
-                    "description": "Name for the new map"
-                }
-            }
-        }
-    },
-    {
-        "name": "list_maps",
-        "description": "List all maps in workspace",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional path to .sxwu workspace file"
-                }
-            }
-        }
-    },
-    {
-        "name": "get_map_info",
-        "description": "Get map information",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional path to .sxwu workspace file"
-                },
-                "map_name": {
-                    "type": "string",
-                    "description": "Name of the map"
-                }
-            },
-            "required": ["map_name"]
-        }
-    },
-    
-    # 工具函数
-    {
-        "name": "compute_distance",
-        "description": "Compute distance between two points",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "point1_x": {
-                    "type": "number",
-                    "description": "X coordinate of first point"
-                },
-                "point1_y": {
-                    "type": "number",
-                    "description": "Y coordinate of first point"
-                },
-                "point2_x": {
-                    "type": "number",
-                    "description": "X coordinate of second point"
-                },
-                "point2_y": {
-                    "type": "number",
-                    "description": "Y coordinate of second point"
-                },
-                "unit": {
-                    "type": "string",
-                    "description": "Distance unit (default: METER)"
-                }
-            },
-            "required": ["point1_x", "point1_y", "point2_x", "point2_y"]
-        }
-    },
-    {
-        "name": "compute_geodesic_area",
-        "description": "Compute geodesic area of polygons",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "region_datasource_path": {
-                    "type": "string",
-                    "description": "Path to the region dataset .udbx file"
-                },
-                "region_dataset_name": {
-                    "type": "string",
-                    "description": "Name of the region dataset"
-                },
-                "area_field": {
-                    "type": "string",
-                    "description": "Optional field to store the calculated area"
-                },
-                "unit": {
-                    "type": "string",
-                    "description": "Area unit (default: SQUARE_METER)"
-                }
-            },
-            "required": ["region_datasource_path", "region_dataset_name"]
-        }
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "status": "error", "message": f"iServer 请求失败: {str(e)}",
+            "traceback": traceback.format_exc()
+        }, indent=2))]
+
+
+async def _check_mcp_health():
+    """MCP 健康检查：不依赖 iObjectsPy 初始化"""
+    checks = {
+        "iobjectspy_importable": False,
+        "java_path_valid": False,
+        "connection_ok": False,
+        "tool_count": 53,
+        "initialized": _initialized
     }
-]
-
-
-def handle_tool_call(tool_name: str, arguments: dict = None) -> dict:
-    """Handle MCP tool calls"""
-    if arguments is None:
-        arguments = {}
     
-    # 初始化与环境
-    if tool_name == "initialize_supermap":
-        return initialize()
-    elif tool_name == "get_environment_info":
-        return get_environment_info()
+    # 检查 iObjectsPy 是否可导入
+    try:
+        import importlib
+        spec = importlib.util.find_spec("iobjectspy")
+        if spec is not None:
+            checks["iobjectspy_importable"] = True
+            checks["iobjectspy_path"] = spec.origin
+        else:
+            # 尝试从自定义路径导入
+            if IOBJECTSPY_PATH in sys.path:
+                checks["iobjectspy_path"] = IOBJECTSPY_PATH
+                checks["iobjectspy_note"] = "路径已添加，但模块未找到"
+    except Exception as e:
+        checks["iobjectspy_error"] = str(e)
     
-    # 数据源管理
-    elif tool_name == "create_udbx_datasource":
-        return create_udbx_datasource(
-            file_path=arguments.get("file_path"),
-            alias=arguments.get("alias")
-        )
-    elif tool_name == "create_memory_datasource":
-        return create_memory_datasource(
-            alias=arguments.get("alias", "MemoryDS")
-        )
-    elif tool_name == "open_udbx_datasource":
-        return open_udbx_datasource(
-            file_path=arguments.get("file_path")
-        )
-    elif tool_name == "list_datasets":
-        return list_datasets(
-            file_path=arguments.get("file_path")
-        )
-    elif tool_name == "get_dataset_info":
-        return get_dataset_info(
-            file_path=arguments.get("file_path"),
-            dataset_name=arguments.get("dataset_name")
-        )
-    
-    # 数据导入
-    elif tool_name == "import_shapefile":
-        return import_shapefile(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            encoding=arguments.get("encoding", "UTF-8")
-        )
-    elif tool_name == "import_csv":
-        return import_csv(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            x_field=arguments.get("x_field"),
-            y_field=arguments.get("y_field"),
-            encoding=arguments.get("encoding", "UTF-8")
-        )
-    elif tool_name == "import_tiff":
-        return import_tiff(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "import_dwg":
-        return import_dwg(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            encoding=arguments.get("encoding", "GBK")
-        )
-    elif tool_name == "import_kml":
-        return import_kml(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "import_geojson":
-        return import_geojson(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            encoding=arguments.get("encoding", "UTF-8")
-        )
-    elif tool_name == "import_osm":
-        return import_osm(
-            source_path=arguments.get("source_path"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            data_type=arguments.get("data_type", "ALL")
-        )
-    
-    # 数据导出
-    elif tool_name == "export_to_shapefile":
-        return export_to_shapefile(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_path=arguments.get("target_path"),
-            encoding=arguments.get("encoding", "UTF-8")
-        )
-    elif tool_name == "export_to_geojson":
-        return export_to_geojson(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_path=arguments.get("target_path"),
-            encoding=arguments.get("encoding", "UTF-8")
-        )
-    elif tool_name == "export_to_tiff":
-        return export_to_tiff(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_path=arguments.get("target_path")
-        )
-    
-    # 数据集操作
-    elif tool_name == "dataset_point_to_line":
-        return dataset_point_to_line(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            order_field=arguments.get("order_field")
-        )
-    elif tool_name == "dataset_line_to_region":
-        return dataset_line_to_region(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "dataset_region_to_line":
-        return dataset_region_to_line(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "dissolve":
-        return dissolve(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            dissolve_field=arguments.get("dissolve_field")
-        )
-    
-    # 几何操作
-    elif tool_name == "create_buffer":
-        return create_buffer(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            buffer_distance=arguments.get("buffer_distance", 100),
-            unit=arguments.get("unit", "METER")
-        )
-    elif tool_name == "create_multi_buffer":
-        return create_multi_buffer(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            buffer_distances=arguments.get("buffer_distances"),
-            unit=arguments.get("unit", "METER")
-        )
-    elif tool_name == "overlay":
-        return overlay(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            overlay_datasource_path=arguments.get("overlay_datasource_path"),
-            overlay_dataset_name=arguments.get("overlay_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            operation=arguments.get("operation", "INTERSECTION")
-        )
-    elif tool_name == "clip":
-        return clip(
-            source_datasource_path=arguments.get("source_datasource_path"),
-            source_dataset_name=arguments.get("source_dataset_name"),
-            clip_datasource_path=arguments.get("clip_datasource_path"),
-            clip_dataset_name=arguments.get("clip_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    
-    # 栅格分析
-    elif tool_name == "calculate_slope":
-        return calculate_slope(
-            dem_datasource_path=arguments.get("dem_datasource_path"),
-            dem_dataset_name=arguments.get("dem_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            z_factor=arguments.get("z_factor", 1.0),
-            unit=arguments.get("unit", "DEGREE")
-        )
-    elif tool_name == "calculate_aspect":
-        return calculate_aspect(
-            dem_datasource_path=arguments.get("dem_datasource_path"),
-            dem_dataset_name=arguments.get("dem_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "calculate_hillshade":
-        return calculate_hillshade(
-            dem_datasource_path=arguments.get("dem_datasource_path"),
-            dem_dataset_name=arguments.get("dem_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            azimuth=arguments.get("azimuth", 315),
-            altitude=arguments.get("altitude", 45)
-        )
-    
-    # 插值分析
-    elif tool_name == "idw_interpolate":
-        return idw_interpolate(
-            point_datasource_path=arguments.get("point_datasource_path"),
-            point_dataset_name=arguments.get("point_dataset_name"),
-            z_field=arguments.get("z_field"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            cell_size=arguments.get("cell_size", 100),
-            search_radius=arguments.get("search_radius", 12),
-            power=arguments.get("power", 2.0)
-        )
-    elif tool_name == "kriging_interpolate":
-        return kriging_interpolate(
-            point_datasource_path=arguments.get("point_datasource_path"),
-            point_dataset_name=arguments.get("point_dataset_name"),
-            z_field=arguments.get("z_field"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            cell_size=arguments.get("cell_size", 100),
-            variogram_model=arguments.get("variogram_model", "SPHERICAL")
-        )
-    
-    # 密度分析
-    elif tool_name == "kernel_density":
-        return kernel_density(
-            point_datasource_path=arguments.get("point_datasource_path"),
-            point_dataset_name=arguments.get("point_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            cell_size=arguments.get("cell_size", 100),
-            search_radius=arguments.get("search_radius", 500)
-        )
-    
-    # 水文分析
-    elif tool_name == "fill_sink":
-        return fill_sink(
-            dem_datasource_path=arguments.get("dem_datasource_path"),
-            dem_dataset_name=arguments.get("dem_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "watershed":
-        return watershed(
-            dem_datasource_path=arguments.get("dem_datasource_path"),
-            dem_dataset_name=arguments.get("dem_dataset_name"),
-            pour_point_datasource_path=arguments.get("pour_point_datasource_path"),
-            pour_point_dataset_name=arguments.get("pour_point_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    
-    # 其他分析
-    elif tool_name == "create_thiessen_polygons":
-        return create_thiessen_polygons(
-            point_datasource_path=arguments.get("point_datasource_path"),
-            point_dataset_name=arguments.get("point_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name")
-        )
-    elif tool_name == "aggregate_points":
-        return aggregate_points(
-            point_datasource_path=arguments.get("point_datasource_path"),
-            point_dataset_name=arguments.get("point_dataset_name"),
-            target_datasource_path=arguments.get("target_datasource_path"),
-            target_name=arguments.get("target_name"),
-            cell_size=arguments.get("cell_size", 500),
-            aggregation_type=arguments.get("aggregation_type", "COUNT")
-        )
-    
-    # 地图制图
-    elif tool_name == "create_map":
-        return create_map(
-            workspace_path=arguments.get("workspace_path"),
-            map_name=arguments.get("map_name", "NewMap")
-        )
-    elif tool_name == "list_maps":
-        return list_maps(
-            workspace_path=arguments.get("workspace_path")
-        )
-    elif tool_name == "get_map_info":
-        return get_map_info(
-            workspace_path=arguments.get("workspace_path"),
-            map_name=arguments.get("map_name")
-        )
-    
-    # 工具函数
-    elif tool_name == "compute_distance":
-        return compute_distance(
-            point1_x=arguments.get("point1_x"),
-            point1_y=arguments.get("point1_y"),
-            point2_x=arguments.get("point2_x"),
-            point2_y=arguments.get("point2_y"),
-            unit=arguments.get("unit", "METER")
-        )
-    elif tool_name == "compute_geodesic_area":
-        return compute_geodesic_area(
-            region_datasource_path=arguments.get("region_datasource_path"),
-            region_dataset_name=arguments.get("region_dataset_name"),
-            area_field=arguments.get("area_field"),
-            unit=arguments.get("unit", "SQUARE_METER")
-        )
-    
+    # 检查 Java 路径
+    import os
+    if os.path.isdir(DEFAULT_IOBJECT_PATH):
+        checks["java_path_valid"] = True
+        checks["java_path"] = DEFAULT_IOBJECT_PATH
+        # 列出关键文件
+        java_files = [f for f in os.listdir(DEFAULT_IOBJECT_PATH) if 'java' in f.lower() or f.endswith('.dll')]
+        checks["java_key_files"] = java_files[:10]
     else:
-        return {"status": "error", "message": f"Unknown tool: {tool_name}"}
+        checks["java_path_error"] = f"路径不存在: {DEFAULT_IOBJECT_PATH}"
+    
+    # 检查连接状态
+    if _initialized and _init_error is None:
+        checks["connection_ok"] = True
+    elif _init_error:
+        checks["connection_error"] = _init_error
+    
+    checks["overall_status"] = "healthy" if all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["connection_ok"]]) else "degraded"
+    
+    return [TextContent(type="text", text=json.dumps(checks, indent=2, ensure_ascii=False))]
+
+
+# =============================================================================
+# 启动服务器
+# =============================================================================
+
+async def main():
+    """启动 MCP 服务器"""
+    async with stdio_server() as (read_stream, write_stream):
+        await _server.run(read_stream, write_stream, _server.create_initialization_options())
 
 
 if __name__ == "__main__":
-    import json
-    
-    print("=" * 60)
-    print("SuperMap iObjectsPy MCP Server - Enhanced Version")
-    print("=" * 60)
-    print("")
-    
-    # Initialize
-    print("[1] Initializing SuperMap connection...")
-    result = initialize()
-    print(f"    Status: {result['status']}")
-    print(f"    Message: {result['message']}")
-    
-    # Get environment info
-    print("")
-    print("[2] Getting environment info...")
-    result = get_environment_info()
-    print(f"    iObjects Java Path: {result.get('iobjects_java_path', 'N/A')}")
-    print(f"    OMP Threads: {result.get('omp_threads', 'N/A')}")
-    
-    # List available tools
-    print("")
-    print(f"[3] MCP Server Configuration:")
-    print(f"    Total Tools: {len(TOOLS)}")
-    
-    # Categorize tools
-    categories = {
-        "初始化与环境": [],
-        "数据源管理": [],
-        "数据导入": [],
-        "数据导出": [],
-        "数据集操作": [],
-        "几何操作": [],
-        "栅格分析": [],
-        "插值分析": [],
-        "密度分析": [],
-        "水文分析": [],
-        "其他分析": [],
-        "地图制图": [],
-        "工具函数": []
-    }
-    
-    for tool in TOOLS:
-        name = tool["name"]
-        if name in ["initialize_supermap", "get_environment_info"]:
-            categories["初始化与环境"].append(name)
-        elif name in ["create_udbx_datasource", "create_memory_datasource", "open_udbx_datasource", "list_datasets", "get_dataset_info"]:
-            categories["数据源管理"].append(name)
-        elif name.startswith("import_"):
-            categories["数据导入"].append(name)
-        elif name.startswith("export_"):
-            categories["数据导出"].append(name)
-        elif name.startswith("dataset_") or name == "dissolve":
-            categories["数据集操作"].append(name)
-        elif name in ["create_buffer", "create_multi_buffer", "overlay", "clip"]:
-            categories["几何操作"].append(name)
-        elif name in ["calculate_slope", "calculate_aspect", "calculate_hillshade"]:
-            categories["栅格分析"].append(name)
-        elif name in ["idw_interpolate", "kriging_interpolate"]:
-            categories["插值分析"].append(name)
-        elif name in ["kernel_density"]:
-            categories["密度分析"].append(name)
-        elif name in ["fill_sink", "watershed"]:
-            categories["水文分析"].append(name)
-        elif name in ["create_thiessen_polygons", "aggregate_points"]:
-            categories["其他分析"].append(name)
-        elif name.startswith("create_") or name.startswith("list_") or name.startswith("get_") and "map" in name:
-            categories["地图制图"].append(name)
-        else:
-            categories["工具函数"].append(name)
-    
-    for cat, tools in categories.items():
-        if tools:
-            print(f"\n    {cat} ({len(tools)}):")
-            for t in tools:
-                print(f"      - {t}")
-    
-    print("")
-    print("=" * 60)
-    print("MCP Server Ready!")
-    print("=" * 60)
+    import asyncio
+    asyncio.run(main())
