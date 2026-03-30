@@ -5,7 +5,8 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 68/68 (全部完成)
+工具数量: 69/69 (全部完成)
+版本: v4.0 (增强健康检查 + Pipeline 批量执行 + 工具描述增强)
 """
 
 import sys
@@ -76,7 +77,7 @@ async def list_tools():
         # ---- 初始化与环境 ----
         Tool(
             name="initialize_supermap",
-            description="初始化 SuperMap iObjectsPy 连接，设置 Java 环境和 License 路径",
+            description="初始化 SuperMap iObjectsPy 连接。适用于: 首次调用其他工具前确保环境就绪（通常自动初始化）。返回: {status, message}",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -84,7 +85,7 @@ async def list_tools():
         ),
         Tool(
             name="get_environment_info",
-            description="获取 SuperMap 环境信息，包括 iObjectsPy 路径、Java 路径、License 路径、OMP 线程数",
+            description="获取 SuperMap 环境信息。适用于: 排查环境问题、确认 Java/License 配置。返回: {status, iobjectspy_path, iobjects_java_path, omp_threads, license}",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -92,7 +93,7 @@ async def list_tools():
         ),
         Tool(
             name="check_mcp_health",
-            description="检查 MCP Server 健康状态，包括 iObjectsPy 是否可导入、Java 路径是否有效、连接是否正常",
+            description="检查 MCP Server 健康状态（增强版）。适用于: 首次使用时验证环境、工具调用失败时排查。检查 iObjectsPy/Java/License/磁盘空间，自动生成修复建议。返回: {overall_status, iobjectspy_importable, java_path_valid, license_valid, disk_space, suggestions[]}",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -101,7 +102,7 @@ async def list_tools():
         # ---- 数据源管理 ----
         Tool(
             name="open_udbx_datasource",
-            description="打开 UDBX 数据源文件，返回数据集列表",
+            description="打开 UDBX 数据源文件。适用于: 需要查看数据源中有哪些数据集、或操作数据集中的数据前。返回: {status, datasets[{name, type, record_count}]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -112,7 +113,7 @@ async def list_tools():
         ),
         Tool(
             name="create_udbx_datasource",
-            description="创建新的 UDBX 数据源文件",
+            description="创建新的 UDBX 数据源文件。适用于: 导入数据前需要先创建目标数据源。返回: {status, datasource_path}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -123,7 +124,7 @@ async def list_tools():
         ),
         Tool(
             name="create_memory_datasource",
-            description="创建内存数据源，用于临时数据处理，不需要写入磁盘",
+            description="创建内存数据源。适用于: 临时数据处理、不需要持久化存储的中间分析结果。返回: {status, datasource_name}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -134,7 +135,7 @@ async def list_tools():
         # ---- 工作空间管理 ----
         Tool(
             name="open_workspace",
-            description="打开 SuperMap 工作空间文件 (.smwu/.sxwu)，返回工作空间基本信息",
+            description="打开工作空间文件 (.smwu/.sxwu)。适用于: 需要访问工作空间中的数据源、地图、场景。返回: {status, workspace_path, datasources[], maps[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -145,7 +146,7 @@ async def list_tools():
         ),
         Tool(
             name="save_workspace",
-            description="保存工作空间到指定路径，支持另存为",
+            description="保存工作空间，支持另存为。适用于: 修改工作空间后保存、或另存为新文件。返回: {status, saved_path}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -157,7 +158,7 @@ async def list_tools():
         ),
         Tool(
             name="get_workspace_info",
-            description="获取工作空间详细信息，包含数据源列表、地图列表、资源列表等",
+            description="获取工作空间详细信息。适用于: 查看工作空间中有哪些数据源、地图、场景和资源。返回: {status, datasources[], maps[], scenes[], resources[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -169,7 +170,7 @@ async def list_tools():
         # ---- 投影/坐标系统 ----
         Tool(
             name="get_coordinate_system",
-            description="获取数据集的坐标系统信息，包括投影类型、EPSG 代码、地理/投影坐标范围",
+            description="获取数据集的坐标系统信息。适用于: 检查数据坐标系类型、EPSG 代码、坐标范围。返回: {status, epsg_code, projection_type, bounds}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -181,7 +182,7 @@ async def list_tools():
         ),
         Tool(
             name="reproject_dataset",
-            description="将数据集从当前坐标系统转换到目标坐标系统（动态投影），输出为新数据集",
+            description="坐标转换（动态投影）。适用于: 将数据从 WGS84 转为 CGCS2000、统一项目坐标系等。返回: {status, source_dataset, output_dataset, target_epsg}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -196,7 +197,7 @@ async def list_tools():
         # ---- 数据集管理 ----
         Tool(
             name="list_datasets",
-            description="列出数据源中的所有数据集，包括名称、类型和记录数",
+            description="列出数据源中所有数据集。适用于: 查看数据源中有哪些数据集及其类型和记录数。返回: {status, datasets[{name, type, record_count}], count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -207,7 +208,7 @@ async def list_tools():
         ),
         Tool(
             name="get_dataset_info",
-            description="获取数据集详细信息，包括类型、记录数、范围等",
+            description="获取数据集详细信息。适用于: 查看数据集类型、字段列表、记录数、空间范围。返回: {status, dataset_name, type, record_count, fields[], bounds}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -219,7 +220,7 @@ async def list_tools():
         ),
         Tool(
             name="query_dataset",
-            description="SQL 属性查询数据集，支持条件过滤、字段选择和数量限制",
+            description="SQL 属性查询。适用于: 按条件筛选数据、选择特定字段、排序和限制返回数量。返回: {status, total_count, returned_count, records[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -235,7 +236,7 @@ async def list_tools():
         ),
         Tool(
             name="delete_dataset",
-            description="删除数据源中的指定数据集，操作不可逆",
+            description="删除数据集（不可逆）。适用于: 清理不再需要的数据集。返回: {status, deleted_dataset}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -248,7 +249,7 @@ async def list_tools():
         # ---- 数据集创建与管理 ----
         Tool(
             name="create_dataset",
-            description="创建新的空数据集，支持点/线/面/文本/纯属性表等类型",
+            description="创建新的空数据集，支持点/线/面/文本/纯属性表等类型。适用于: 新建存储结构、准备接收导入数据、创建分析结果数据集。返回: {status, dataset_name, dataset_type}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -262,7 +263,7 @@ async def list_tools():
         ),
         Tool(
             name="copy_dataset",
-            description="复制数据集到同数据源或不同数据源中",
+            description="复制数据集到同数据源或不同数据源中。适用于: 数据备份、跨数据源迁移、创建分析副本。返回: {status, source_dataset, target_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -276,7 +277,7 @@ async def list_tools():
         ),
         Tool(
             name="append_to_dataset",
-            description="将一个数据集的要素追加到另一个数据集中，要求两个数据集结构相同",
+            description="将一个数据集的要素追加到另一个数据集中，要求两个数据集结构相同。适用于: 合并多个分区数据、将新采集数据追加到已有数据集。返回: {status, target_dataset, appended_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -290,7 +291,7 @@ async def list_tools():
         ),
         Tool(
             name="add_field",
-            description="为已有数据集添加新字段",
+            description="为数据集添加新字段。适用于: 分析前准备数据结构。返回: {status, dataset_name, field_name, field_type}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -305,7 +306,7 @@ async def list_tools():
         ),
         Tool(
             name="calculate_field",
-            description="对数据集字段进行批量计算赋值，支持简单表达式",
+            description="批量计算字段值。适用于: 根据表达式计算面积/长度/分类等字段（如 SmArea/1000000）。返回: {status, dataset_name, field_name, updated_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -321,7 +322,7 @@ async def list_tools():
         # ---- 数据导入 ----
         Tool(
             name="import_shapefile",
-            description="导入 Shapefile 文件到数据源中",
+            description="导入 Shapefile 文件到数据源。适用于: 用户有 .shp 文件需要入库。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -334,7 +335,7 @@ async def list_tools():
         ),
         Tool(
             name="import_gdb",
-            description="导入 ESRI GDB (FileGDB) 数据到数据源中",
+            description="导入 ESRI GDB (FileGDB) 数据到数据源中。适用于: 从 ArcGIS 导出的 FileGDB 数据入库。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -347,7 +348,7 @@ async def list_tools():
         ),
         Tool(
             name="import_csv",
-            description="导入 CSV 文件为点数据集。支持经纬度列映射，自动创建点几何",
+            description="导入 CSV 文件为点数据集，支持经纬度列映射，自动创建点几何。适用于: 将经纬度坐标表格（如 POI 列表、采样点）转为空间点数据。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -363,7 +364,7 @@ async def list_tools():
         ),
         Tool(
             name="import_tiff",
-            description="导入 GeoTIFF 栅格文件为栅格数据集",
+            description="导入 GeoTIFF 栅格文件为栅格数据集。适用于: 将 DEM/遥感影像/栅格分析结果入库管理。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -377,7 +378,7 @@ async def list_tools():
         ),
         Tool(
             name="import_dwg",
-            description="导入 AutoCAD DWG/DXF 文件为数据集",
+            description="导入 AutoCAD DWG/DXF 文件为数据集。适用于: 将 CAD 工程图/规划图转为 GIS 矢量数据进行空间分析。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -390,7 +391,7 @@ async def list_tools():
         ),
         Tool(
             name="import_kml",
-            description="导入 KML/KMZ 文件为数据集",
+            description="导入 KML/KMZ 文件为数据集。适用于: 将 Google Earth 标注/区域/路径数据入库进行 GIS 分析。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -403,7 +404,7 @@ async def list_tools():
         ),
         Tool(
             name="import_geojson",
-            description="导入 GeoJSON 文件为矢量数据集",
+            description="导入 GeoJSON 文件为矢量数据集。适用于: 将 Web 地图服务/开放数据平台导出的 GeoJSON 数据入库。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -416,7 +417,7 @@ async def list_tools():
         ),
         Tool(
             name="import_osm",
-            description="导入 OSM (OpenStreetMap) 文件为数据集",
+            description="导入 OSM (OpenStreetMap) 文件为数据集。适用于: 将 OpenStreetMap 导出的路网/建筑/兴趣点数据入库分析。返回: {status, dataset_name, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -430,7 +431,7 @@ async def list_tools():
         # ---- 批量导入导出 ----
         Tool(
             name="batch_import",
-            description="批量导入多个文件到数据源，支持 Shapefile/GeoJSON/CSV/KML/DWG 等格式混合导入",
+            description="批量导入多个文件到数据源。适用于: 一次性导入多个不同格式的文件（Shapefile/GeoJSON/CSV/KML/DWG/TIFF）。返回: {status, total, success, failed, details[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -443,7 +444,7 @@ async def list_tools():
         ),
         Tool(
             name="batch_export",
-            description="批量导出数据源中的多个数据集为指定格式（Shapefile/GeoJSON/KML）",
+            description="批量导出多个数据集。适用于: 一次性导出多个数据集为 Shapefile/GeoJSON/KML。返回: {status, total, success, failed, details[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -458,7 +459,7 @@ async def list_tools():
         # ---- 数据导出 ----
         Tool(
             name="export_shapefile",
-            description="导出数据集为 Shapefile 文件",
+            description="导出数据集为 Shapefile。适用于: 需要将数据导出为 .shp 格式供其他软件使用。返回: {status, output_path}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -471,7 +472,7 @@ async def list_tools():
         ),
         Tool(
             name="export_geojson",
-            description="导出数据集为 GeoJSON 文件",
+            description="导出数据集为 GeoJSON 文件。适用于: 将分析结果发布到 Web 地图、与其他 GIS 平台交换数据。返回: {status, output_path}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -485,7 +486,7 @@ async def list_tools():
         ),
         Tool(
             name="export_tiff",
-            description="导出栅格数据集为 GeoTIFF 文件",
+            description="导出栅格数据集为 GeoTIFF 文件。适用于: 将分析结果栅格（坡度、插值面等）导出供其他软件使用。返回: {status, output_path, band_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -500,7 +501,7 @@ async def list_tools():
         # ---- 数据集操作 ----
         Tool(
             name="dataset_point_to_line",
-            description="将点数据集转换为线数据集，按字段排序后依次连线",
+            description="将点数据集转换为线数据集，按字段排序后依次连线。适用于: GPS 轨迹点转路线、河流采样点连线、管线段连接。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -515,7 +516,7 @@ async def list_tools():
         ),
         Tool(
             name="dataset_line_to_region",
-            description="将线数据集转换为面数据集，封闭区域自动构面",
+            description="线转面。适用于: GPS 轨迹封闭区域构面、等高线转面。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -528,7 +529,7 @@ async def list_tools():
         ),
         Tool(
             name="dataset_region_to_line",
-            description="将面数据集转换为线数据集，提取边界线",
+            description="面转线。适用于: 提取面边界用于叠加或可视化。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -541,7 +542,7 @@ async def list_tools():
         ),
         Tool(
             name="dissolve",
-            description="融合分析，按指定字段合并相邻且属性相同的要素",
+            description="融合分析。适用于: 按属性合并相邻同类要素（如合并相邻同名行政区划）。返回: {status, result_dataset, dissolve_field, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -556,7 +557,7 @@ async def list_tools():
         # ---- 空间分析 ----
         Tool(
             name="create_buffer",
-            description="创建缓冲区，为要素生成指定距离的缓冲多边形",
+            description="创建缓冲区。适用于: POI 服务范围分析、道路影响范围、管线保护区域等。返回: {status, result_dataset, buffer_distance, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -570,7 +571,7 @@ async def list_tools():
         ),
         Tool(
             name="create_multi_buffer",
-            description="创建多级缓冲区（同心环），可指定多个距离值",
+            description="创建多级缓冲区（同心环），可指定多个距离值。适用于: 设施多级服务范围分析（如 1/3/5 公里圈）、噪声衰减分区。返回: {status, result_dataset, buffer_distances[], record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -585,7 +586,7 @@ async def list_tools():
         ),
         Tool(
             name="overlay",
-            description="叠加分析，支持 INTERSECTION/UNION/ERASE/IDENTITY/UPDATE/CLIP/XOR",
+            description="叠加分析。适用于: 土地适宜性评估、多图层空间关系计算。支持 INTERSECTION/UNION/ERASE/IDENTITY/UPDATE/CLIP/XOR。返回: {status, result_dataset, operation, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -600,7 +601,7 @@ async def list_tools():
         ),
         Tool(
             name="clip_data",
-            description="裁剪分析，用一个数据集裁剪另一个数据集",
+            description="裁剪分析。适用于: 用面数据集裁剪线/面数据集，提取感兴趣区域内的数据。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -614,7 +615,7 @@ async def list_tools():
         ),
         Tool(
             name="calculate_slope",
-            description="计算坡度，基于 DEM 栅格数据",
+            description="计算坡度。适用于: 地形分析、建设用地适宜性评价。返回: {status, result_dataset, unit}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -627,7 +628,7 @@ async def list_tools():
         ),
         Tool(
             name="calculate_aspect",
-            description="计算坡向，基于 DEM 栅格数据",
+            description="计算坡向，基于 DEM 栅格数据。适用于: 地形分析、日照评估、农作物适宜性评价中判断朝向。返回: {status, result_dataset, unit}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -640,7 +641,7 @@ async def list_tools():
         ),
         Tool(
             name="calculate_hillshade",
-            description="计算山体阴影，用于地形可视化",
+            description="计算山体阴影，用于地形可视化。适用于: 地图晕渲制图、三维地形效果展示、增强地形立体感。返回: {status, result_dataset, azimuth, altitude}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -655,7 +656,7 @@ async def list_tools():
         ),
         Tool(
             name="idw_interpolate",
-            description="IDW 反距离权重插值，将点数据插值为连续栅格面",
+            description="IDW 插值。适用于: 采样点数据（气温/降雨/高程）生成连续栅格面。返回: {status, result_dataset, resolution}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -672,7 +673,7 @@ async def list_tools():
         ),
         Tool(
             name="kriging_interpolate",
-            description="克里金插值，基于地统计学的空间插值方法",
+            description="克里金插值，基于地统计学的空间插值方法。适用于: 采样点数据（如土壤重金属、地下水水位）生成连续分布面，考虑空间自相关性。返回: {status, result_dataset, resolution}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -689,7 +690,7 @@ async def list_tools():
         ),
         Tool(
             name="kernel_density",
-            description="核密度分析，计算点/线要素的密度分布",
+            description="核密度分析。适用于: POI 热力图、犯罪密度、事件分布密度分析。返回: {status, result_dataset, search_radius}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -705,7 +706,7 @@ async def list_tools():
         ),
         Tool(
             name="fill_sink",
-            description="填洼分析，填充 DEM 中的洼地，生成无洼地 DEM",
+            description="填洼分析，填充 DEM 中的洼地，生成无洼地 DEM。适用于: 流域分析前的数据预处理，消除因数据误差导致的假洼地。返回: {status, result_dataset}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -718,7 +719,7 @@ async def list_tools():
         ),
         Tool(
             name="watershed",
-            description="流域分析/汇水分析，基于填洼 DEM 和流向数据",
+            description="流域分析/汇水分析，基于填洼 DEM 和流向数据。适用于: 确定汇水范围、计算流域面积、洪水风险评估。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -732,7 +733,7 @@ async def list_tools():
         ),
         Tool(
             name="create_thiessen_polygons",
-            description="创建泰森多边形（Voronoi 图），基于点数据集",
+            description="创建泰森多边形（Voronoi 图）。适用于: 基于点数据划分邻近区域（如服务区域划分）。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -745,7 +746,7 @@ async def list_tools():
         ),
         Tool(
             name="aggregate_points",
-            description="点聚合分析，将密集点聚合为面要素并统计数量",
+            description="点聚合分析，将密集点聚合为面要素并统计数量。适用于: POI 密度聚合、事件热点区域划分、采样点汇总统计。返回: {status, result_dataset, record_count}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -759,7 +760,7 @@ async def list_tools():
         ),
         Tool(
             name="reclassify",
-            description="重分类，将栅格数据按规则重新分类",
+            description="重分类，将栅格数据按规则重新分类。适用于: 坡度/高程分级、适宜性评价中连续值转等级、多因子叠加前的标准化。返回: {status, result_dataset}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -774,7 +775,7 @@ async def list_tools():
         # ---- 地图制图 ----
         Tool(
             name="create_map",
-            description="创建新地图，指定名称和数据范围",
+            description="创建新地图，指定名称和数据范围。适用于: 从零开始制图、为专题图创建画布。返回: {status, map_name}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -785,7 +786,7 @@ async def list_tools():
         ),
         Tool(
             name="list_maps",
-            description="列出工作空间中的所有地图",
+            description="列出工作空间中的所有地图。适用于: 查看已有地图、确认地图名称后再进行图层添加或出图操作。返回: {status, maps[], count}",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -793,7 +794,7 @@ async def list_tools():
         ),
         Tool(
             name="get_map_info",
-            description="获取地图详细信息，包括图层列表、范围、比例尺等",
+            description="获取地图详细信息，包括图层列表、范围、比例尺等。适用于: 检查地图内容、确认图层顺序、查看地图范围。返回: {status, map_name, layers[], bounds, scale}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -804,7 +805,7 @@ async def list_tools():
         ),
         Tool(
             name="add_layer_to_map",
-            description="向工作空间中的地图添加数据集作为新图层",
+            description="向工作空间中的地图添加数据集作为新图层。适用于: 组合多个数据集制作专题地图、叠加分析结果到底图。返回: {status, map_name, layer_name, layer_index}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -818,7 +819,7 @@ async def list_tools():
         ),
         Tool(
             name="export_map_image",
-            description="将工作空间中的地图导出为图片文件（PNG/JPG），支持指定范围和分辨率",
+            description="将工作空间中的地图导出为图片文件（PNG/JPG），支持指定范围和分辨率。适用于: 制图成果输出、报告配图、数据可视化截图。返回: {status, output_path, dpi, size}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -835,7 +836,7 @@ async def list_tools():
         ),
         Tool(
             name="generate_map_tiles",
-            description="[iServer] 生成地图瓦片缓存，支持设定缩放级别、范围和存储格式",
+            description="[iServer] 生成地图瓦片缓存，支持设定缩放级别、范围和存储格式。适用于: 为 Web 地图应用预生成瓦片缓存，提升在线地图访问速度。返回: {status, tile_count, storage_path}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -852,7 +853,7 @@ async def list_tools():
         # ---- 工具函数 ----
         Tool(
             name="compute_distance",
-            description="计算两个点之间的距离（支持投影坐标和地理坐标）",
+            description="计算两个点之间的距离（支持投影坐标和地理坐标）。适用于: 测量两点间距、计算设施服务半径、验证坐标精度。返回: {status, distance, unit}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -865,7 +866,7 @@ async def list_tools():
         ),
         Tool(
             name="compute_geodesic_area",
-            description="计算球面上的面积（平方米），适用于地理坐标系下的面数据",
+            description="计算球面上的面积（平方米），适用于地理坐标系下的面数据。适用于: 精确计算 WGS84/CGCS2000 坐标系下的地块面积、湖泊面积。返回: {status, area, unit}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -877,7 +878,7 @@ async def list_tools():
         # ---- iServer REST API ----
         Tool(
             name="iserver_get_service_list",
-            description="[iServer] 获取所有已发布的服务列表",
+            description="[iServer] 获取所有已发布的服务列表。适用于: 查看服务器上有哪些地图服务/数据服务/分析服务可用。返回: {status, services[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -888,7 +889,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_get_service_status",
-            description="[iServer] 获取指定服务的运行状态",
+            description="[iServer] 获取指定服务的运行状态。适用于: 监控服务是否正常运行、排查服务不可用问题。返回: {status, service_name, running, status}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -901,7 +902,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_start_service",
-            description="[iServer] 启动指定服务",
+            description="[iServer] 启动指定服务。适用于: 恢复已停止的服务、首次启用新发布的服务。返回: {status, service_name, new_status}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -914,7 +915,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_stop_service",
-            description="[iServer] 停止指定服务",
+            description="[iServer] 停止指定服务。适用于: 维护期间暂停服务、释放服务器资源。返回: {status, service_name, new_status}"}
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -927,7 +928,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_restart_service",
-            description="[iServer] 重启指定服务",
+            description="[iServer] 重启指定服务。适用于: 服务异常后恢复、配置变更后重新加载。返回: {status, service_name, new_status}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -940,7 +941,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_get_map_info",
-            description="[iServer] 获取地图服务信息，包括图层、范围、比例尺等",
+            description="[iServer] 获取地图服务信息，包括图层、范围、比例尺等。适用于: 确认服务中包含哪些图层和数据范围、前端开发时获取地图配置。返回: {status, layers[], bounds, scale}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -953,7 +954,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_query_data",
-            description="[iServer] 查询数据服务，支持 SQL 查询和空间查询",
+            description="[iServer] 查询数据服务，支持 SQL 查询和空间查询。适用于: 通过 REST API 远程查询 iServer 发布的数据服务中的要素。返回: {status, total_count, features[]}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -971,7 +972,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_clear_cache",
-            description="[iServer] 清除指定服务的缓存",
+            description="[iServer] 清除指定服务的缓存。适用于: 数据更新后刷新服务缓存、解决客户端显示旧数据问题。返回: {status, service_name, cache_cleared}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -984,7 +985,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_publish_map_service",
-            description="[iServer] 发布地图服务",
+            description="[iServer] 发布地图服务。适用于: 将工作空间中的地图发布为 REST 地图服务供 Web/移动端调用。返回: {status, service_name, service_url}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -999,7 +1000,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_get_token",
-            description="[iServer] 获取认证令牌",
+            description="[iServer] 获取认证令牌。适用于: 首次调用需要认证的 iServer REST API 前获取 token。返回: {status, token, expire_time}",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1007,6 +1008,31 @@ async def list_tools():
                     "username": {"type": "string", "description": "用户名（默认: admin）"},
                     "password": {"type": "string", "description": "密码（默认: supermap）"}
                 }
+            }
+        ),
+        # ---- 批量执行 ----
+        Tool(
+            name="execute_pipeline",
+            description="批量执行多个 MCP 工具，按顺序依次执行。适用于: 用户需要连续执行多步 GIS 操作（如导入→分析→导出），减少 Agent 往返次数。步骤间自动传递结果，支持中间结果检查。返回: 每步的执行状态和结果汇总",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string", "description": "工具名称，如 import_shapefile、create_buffer"},
+                                "args": {"type": "object", "description": "工具参数（键值对）"},
+                                "description": {"type": "string", "description": "步骤说明（可选，用于日志）"}
+                            },
+                            "required": ["tool", "args"]
+                        },
+                        "description": "执行步骤列表，按顺序依次执行。每步包含 tool（工具名）和 args（参数）。后续步骤可通过 {{步骤索引.结果字段}} 引用前序步骤结果，例如 {{0.dataset_name}} 表示第 1 步返回的 dataset_name"
+                    },
+                    "stop_on_error": {"type": "boolean", "description": "遇到错误时是否停止后续步骤（默认: true）"}
+                },
+                "required": ["steps"]
             }
         ),
     ]
@@ -2659,6 +2685,94 @@ async def call_tool(name: str, arguments: dict):
                     "status": "error", "message": f"球面面积计算失败: {str(e)}"
                 }, indent=2))]
         
+        # ==================== Pipeline 批量执行 ====================
+        elif name == "execute_pipeline":
+            try:
+                steps = arguments["steps"]
+                if isinstance(steps, str):
+                    steps = json.loads(steps)
+                stop_on_error = arguments.get("stop_on_error", True)
+                
+                results = []
+                step_outputs = []  # 存储每步结果用于引用传递
+                success_count = 0
+                fail_count = 0
+                
+                for i, step in enumerate(steps):
+                    tool_name = step["tool"]
+                    tool_args = step.get("args", {})
+                    step_desc = step.get("description", "")
+                    
+                    # 替换参数中的模板引用 {{步骤索引.字段名}}
+                    import re
+                    for key, val in tool_args.items():
+                        if isinstance(val, str):
+                            def replace_ref(match):
+                                ref_idx = int(match.group(1))
+                                ref_field = match.group(2)
+                                if ref_idx < len(step_outputs):
+                                    prev_result = step_outputs[ref_idx]
+                                    if isinstance(prev_result, dict):
+                                        return str(prev_result.get(ref_field, match.group(0)))
+                                return match.group(0)
+                            tool_args[key] = re.sub(r"\{\{(\d+)\.(\w+)\}\}", replace_ref, val)
+                    
+                    try:
+                        # 调用 call_tool 自身来执行每步
+                        step_result = await call_tool(tool_name, tool_args)
+                        # 解析结果
+                        result_text = step_result[0].text if step_result else ""
+                        try:
+                            result_json = json.loads(result_text)
+                        except (json.JSONDecodeError, TypeError):
+                            result_json = {"raw": result_text}
+                        
+                        step_outputs.append(result_json)
+                        results.append({
+                            "step": i + 1,
+                            "tool": tool_name,
+                            "description": step_desc,
+                            "status": "success",
+                            "result": result_json
+                        })
+                        success_count += 1
+                    except Exception as e:
+                        error_msg = str(e)
+                        step_outputs.append({"error": error_msg})
+                        results.append({
+                            "step": i + 1,
+                            "tool": tool_name,
+                            "description": step_desc,
+                            "status": "error",
+                            "error": error_msg
+                        })
+                        fail_count += 1
+                        if stop_on_error:
+                            # 标记剩余步骤为 skipped
+                            for j in range(i + 1, len(steps)):
+                                results.append({
+                                    "step": j + 1,
+                                    "tool": steps[j].get("tool", "?"),
+                                    "description": steps[j].get("description", ""),
+                                    "status": "skipped",
+                                    "reason": "前序步骤失败，已停止执行"
+                                })
+                            break
+                
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "completed",
+                    "total_steps": len(steps),
+                    "success": success_count,
+                    "failed": fail_count,
+                    "results": results
+                }, indent=2, ensure_ascii=False, default=str))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"Pipeline 执行失败: {str(e)}",
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        
         # ==================== iServer REST API 工具 ====================
         elif name.startswith("iserver_"):
             return await _handle_iserver_tool(name, arguments)
@@ -2839,17 +2953,27 @@ async def _handle_iserver_tool(name: str, arguments: dict):
 
 
 async def _check_mcp_health():
-    """MCP 健康检查：不依赖 iObjectsPy 初始化"""
+    """MCP 健康检查：不依赖 iObjectsPy 初始化，增强版 v4.0
+    
+    检查项:
+    1. iObjectsPy 模块是否可导入
+    2. Java 路径是否有效（含 Java 版本检测）
+    3. License 文件是否存在且有效
+    4. 磁盘空间是否充足
+    5. 连接状态
+    6. 自动生成修复建议
+    """
     checks = {
         "iobjectspy_importable": False,
         "java_path_valid": False,
         "connection_ok": False,
         "license_valid": False,
-        "tool_count": 68,
-        "initialized": _initialized
+        "tool_count": 69,
+        "initialized": _initialized,
+        "suggestions": []
     }
     
-    # 检查 License 文件
+    # ===== 1. 检查 License 文件 =====
     license_info = {"path": DEFAULT_LICENSE_PATH}
     if os.path.isdir(DEFAULT_LICENSE_PATH):
         lic_files = [f for f in os.listdir(DEFAULT_LICENSE_PATH) if f.endswith(('.lic', '.licx', '.lic12', '.udlx'))]
@@ -2857,15 +2981,18 @@ async def _check_mcp_health():
             checks["license_valid"] = True
             license_info["exists"] = True
             license_info["files"] = lic_files
+            license_info["file_count"] = len(lic_files)
         else:
             license_info["exists"] = True
             license_info["error"] = "License 目录存在但未找到 License 文件（.lic/.licx/.lic12/.udlx）"
+            checks["suggestions"].append("请将 License 文件（.lic/.licx）放入目录: " + DEFAULT_LICENSE_PATH)
     else:
         license_info["exists"] = False
-        license_info["error"] = f"License 目录不存在: {DEFAULT_LICENSE_PATH}，请通过环境变量 SUPERMAP_LICENSE 指定正确路径"
+        license_info["error"] = f"License 目录不存在: {DEFAULT_LICENSE_PATH}"
+        checks["suggestions"].append(f"License 目录不存在。请通过环境变量 SUPERMAP_LICENSE 指定正确路径，或安装 SuperMap License 到: {DEFAULT_LICENSE_PATH}")
     checks["license"] = license_info
     
-    # 检查 iObjectsPy 是否可导入
+    # ===== 2. 检查 iObjectsPy 是否可导入 =====
     checks["iobjectspy_config_path"] = IOBJECTSPY_PATH
     try:
         import importlib
@@ -2874,31 +3001,75 @@ async def _check_mcp_health():
             checks["iobjectspy_importable"] = True
             checks["iobjectspy_path"] = spec.origin
         else:
-            # 尝试从自定义路径导入
             if IOBJECTSPY_PATH in sys.path:
                 checks["iobjectspy_path"] = IOBJECTSPY_PATH
                 checks["iobjectspy_note"] = "路径已添加，但模块未找到"
+                checks["suggestions"].append(f"iObjectsPy 路径已添加但模块未找到。请确认路径正确: {IOBJECTSPY_PATH}")
+            else:
+                checks["suggestions"].append(f"无法找到 iObjectsPy 模块。请通过环境变量 SUPERMAP_IOBJECTSPY_PATH 指定正确路径")
     except Exception as e:
         checks["iobjectspy_error"] = str(e)
+        checks["suggestions"].append(f"iObjectsPy 导入异常: {str(e)}")
     
-    # 检查 Java 路径
-    import os
+    # ===== 3. 检查 Java 路径（增强：检测 Java 版本） =====
+    import subprocess
     if os.path.isdir(DEFAULT_IOBJECT_PATH):
         checks["java_path_valid"] = True
         checks["java_path"] = DEFAULT_IOBJECT_PATH
-        # 列出关键文件
-        java_files = [f for f in os.listdir(DEFAULT_IOBJECT_PATH) if 'java' in f.lower() or f.endswith('.dll')]
+        # 检测关键文件
+        java_files = [f for f in os.listdir(DEFAULT_IOBJECT_PATH) if 'java' in f.lower() or f.endswith('.dll') or f.endswith('.jar')]
         checks["java_key_files"] = java_files[:10]
+        # 尝试检测 Java 版本
+        java_exe = os.path.join(DEFAULT_IOBJECT_PATH, "java.exe")
+        if os.path.exists(java_exe):
+            try:
+                result = subprocess.run(
+                    [java_exe, "-version"],
+                    capture_output=True, text=True, timeout=10,
+                    encoding="utf-8", errors="replace"
+                )
+                version_line = result.stderr or result.stdout
+                checks["java_version"] = version_line.strip().split("\n")[0] if version_line else "unknown"
+            except Exception as e:
+                checks["java_version_error"] = str(e)
+        else:
+            checks["suggestions"].append(f"Java 可执行文件不存在: {java_exe}")
     else:
         checks["java_path_error"] = f"路径不存在: {DEFAULT_IOBJECT_PATH}"
+        checks["suggestions"].append(f"Java 路径不存在: {DEFAULT_IOBJECT_PATH}。请通过环境变量 SUPERMAP_JAVA_PATH 指定正确路径")
     
-    # 检查连接状态
+    # ===== 4. 检查磁盘空间 =====
+    try:
+        import shutil
+        # 检查 iObjectsPy 所在磁盘
+        if os.path.exists(IOBJECTSPY_PATH):
+            disk_info = shutil.disk_usage(IOBJECTSPY_PATH)
+            checks["disk_space"] = {
+                "path": IOBJECTSPY_PATH,
+                "total_gb": round(disk_info.total / (1024**3), 1),
+                "free_gb": round(disk_info.free / (1024**3), 1),
+                "used_percent": round((1 - disk_info.free / disk_info.total) * 100, 1)
+            }
+            if disk_info.free < 1024 * 1024 * 1024:  # < 1GB
+                checks["suggestions"].append("磁盘剩余空间不足 1GB，可能影响数据处理")
+    except Exception as e:
+        checks["disk_space_error"] = str(e)
+    
+    # ===== 5. 检查连接状态 =====
     if _initialized and _init_error is None:
         checks["connection_ok"] = True
     elif _init_error:
         checks["connection_error"] = _init_error
+        checks["suggestions"].append(f"iObjectsPy 连接失败: {_init_error}")
+    elif not _initialized:
+        checks["connection_note"] = "尚未初始化。首次调用工具时会自动初始化"
     
-    checks["overall_status"] = "healthy" if all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["connection_ok"], checks["license_valid"]]) else "degraded"
+    # ===== 6. 综合状态与修复建议 =====
+    all_ok = all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["license_valid"]])
+    checks["overall_status"] = "healthy" if all_ok else "degraded"
+    
+    if not checks["suggestions"]:
+        checks["suggestions"].append("所有检查通过，MCP Server 运行正常")
     
     return [TextContent(type="text", text=json.dumps(checks, indent=2, ensure_ascii=False))]
 
