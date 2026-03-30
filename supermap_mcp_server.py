@@ -915,7 +915,7 @@ async def list_tools():
         ),
         Tool(
             name="iserver_stop_service",
-            description="[iServer] 停止指定服务。适用于: 维护期间暂停服务、释放服务器资源。返回: {status, service_name, new_status}"}
+            description="[iServer] 停止指定服务。适用于: 维护期间暂停服务、释放服务器资源。返回: {status, service_name, new_status}",
             inputSchema={
                 "type": "object",
                 "properties": {
