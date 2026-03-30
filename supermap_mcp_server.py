@@ -1091,7 +1091,9 @@ async def call_tool(name: str, arguments: dict):
         
         # 创建数据源
         elif name == "create_udbx_datasource":
-            conn_info = DatasourceConnectionInfo.make(arguments["file_path"])
+            conn_info = DatasourceConnectionInfo()
+            conn_info.set_server(arguments["file_path"])
+            conn_info.set_type(iobs.EngineType.UDBX)
             ds = create_datasource(conn_info)
             result = {"status": "success", "datasource": arguments["file_path"]}
             ds.close()
