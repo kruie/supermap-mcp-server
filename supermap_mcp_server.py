@@ -1103,8 +1103,8 @@ async def call_tool(name: str, arguments: dict):
         elif name == "create_memory_datasource":
             ds_name = arguments.get("datasource_name", "MemoryDS")
             conn_info = DatasourceConnectionInfo()
-            conn_info.server = ds_name
-            conn_info.engine_type = iobs.EngineType.MEMORY
+            conn_info.set_server(ds_name)
+            conn_info.set_type(iobs.EngineType.MEMORY)
             ds = create_datasource(conn_info)
             result = {"status": "success", "datasource": ds_name, "type": "memory"}
             ds.close()
@@ -1235,7 +1235,9 @@ async def call_tool(name: str, arguments: dict):
         # 获取坐标系统
         elif name == "get_coordinate_system":
             try:
-                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(arguments["datasource_path"])
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset = ds.get_dataset(arguments["dataset_name"])
                 try:
@@ -1272,7 +1274,9 @@ async def call_tool(name: str, arguments: dict):
                 out_ds = arguments["output_dataset"]
                 target_epsg = arguments["target_epsg"]
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset = ds.get_dataset(ds_name)
                 
@@ -1309,7 +1313,9 @@ async def call_tool(name: str, arguments: dict):
         
         # 列出数据集
         elif name == "list_datasets":
-            conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+            conn_info = DatasourceConnectionInfo()
+            conn_info.set_server(arguments["datasource_path"])
+            conn_info.set_type(iobs.EngineType.UDBX)
             ds = open_datasource(conn_info)
             datasets = []
             for ds_item in ds.datasets:
@@ -1327,7 +1333,9 @@ async def call_tool(name: str, arguments: dict):
         
         # 数据集信息
         elif name == "get_dataset_info":
-            conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+            conn_info = DatasourceConnectionInfo()
+            conn_info.set_server(arguments["datasource_path"])
+            conn_info.set_type(iobs.EngineType.UDBX)
             ds = open_datasource(conn_info)
             dataset = ds.get_dataset(arguments["dataset_name"])
             try:
@@ -1350,7 +1358,9 @@ async def call_tool(name: str, arguments: dict):
         # SQL 查询数据集
         elif name == "query_dataset":
             try:
-                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(arguments["datasource_path"])
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset = ds.get_dataset(arguments["dataset_name"])
                 
@@ -1414,7 +1424,9 @@ async def call_tool(name: str, arguments: dict):
         # 删除数据集
         elif name == "delete_dataset":
             try:
-                conn_info = DatasourceConnectionInfo.make(arguments["datasource_path"])
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(arguments["datasource_path"])
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset_name = arguments["dataset_name"]
                 
@@ -1462,7 +1474,9 @@ async def call_tool(name: str, arguments: dict):
                 }
                 ds_type = type_map.get(ds_type_str, iobs.DatasetType.POINT)
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 
                 # 创建数据集
@@ -1513,7 +1527,9 @@ async def call_tool(name: str, arguments: dict):
                 out_name = arguments["output_dataset"]
                 target_path = arguments.get("target_datasource_path", ds_path)
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 
                 if target_path == ds_path:
@@ -1549,11 +1565,15 @@ async def call_tool(name: str, arguments: dict):
                 src_path = arguments.get("source_datasource_path", ds_path)
                 src_name = arguments["source_dataset_name"]
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 target_ds = ds.get_dataset(ds_name)
                 
-                src_conn_info = DatasourceConnectionInfo.make(src_path)
+                src_conn_info = DatasourceConnectionInfo()
+                src_conn_info.set_server(src_path)
+                src_conn_info.set_type(iobs.EngineType.UDBX)
                 src_ds = open_datasource(src_conn_info)
                 source_dataset = src_ds.get_dataset(src_name)
                 
@@ -1592,7 +1612,9 @@ async def call_tool(name: str, arguments: dict):
                 ftype_str = arguments.get("field_type", "TEXT").upper()
                 fsize = arguments.get("field_size", 255)
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset = ds.get_dataset(ds_name)
                 
@@ -1632,7 +1654,9 @@ async def call_tool(name: str, arguments: dict):
                 expression = arguments["expression"]
                 sql_filter = arguments.get("sql_filter", "")
                 
-                conn_info = DatasourceConnectionInfo.make(ds_path)
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(ds_path)
+                conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
                 dataset = ds.get_dataset(ds_name)
                 
@@ -1717,8 +1741,8 @@ async def call_tool(name: str, arguments: dict):
             try:
                 # 打开目标数据源
                 target_conn = DatasourceConnectionInfo()
-                target_conn.server = datasource_path
-                target_conn.engine_type = EngineType.UDBX
+                target_conn.set_server(datasource_path)
+                target_conn.set_type(EngineType.UDBX)
                 target_ds = spy.open_datasource(target_conn)
                 
                 if not target_ds:
@@ -1726,8 +1750,8 @@ async def call_tool(name: str, arguments: dict):
                 
                 # 打开源GDB
                 src_conn = DatasourceConnectionInfo()
-                src_conn.server = gdb_path
-                src_conn.engine_type = EngineType.FILEGDB
+                src_conn.set_server(gdb_path)
+                src_conn.set_type(EngineType.FILEGDB)
                 src_ds = spy.open_datasource(src_conn)
                 
                 if not src_ds:
