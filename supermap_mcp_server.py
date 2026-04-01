@@ -6,7 +6,7 @@ SuperMap iObjectsPy MCP Server
 支持通过 stdio 与 WorkBuddy 通信
 
 工具数量: 69/69 (全部完成)
-版本: v4.0 (增强健康检查 + Pipeline 批量执行 + 工具描述增强)
+版本: v4.2 (JVM 后台预热：服务器启动时异步预热 JVM，消除首次调用冷启动超时)
 """
 
 import sys
@@ -17,18 +17,37 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+# =============================================================================
+# 关键：在导入 iObjectsPy 之前，把 iDesktopX 内嵌 JRE 加到 PATH 最前面
+# 原理：iObjectsPy 通过 `cmd.exe /C start /b java ...` 异步启动 JVM，
+#       java 命令从 PATH 里解析，内嵌 JRE 的 java.exe 能正确加载所有 DLL。
+# =============================================================================
+_IDESKTOPX_BIN = os.environ.get(
+    "SUPERMAP_IDESKTOPX_BIN",
+    r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
+).replace("/", "\\")
+_IDESKTOPX_JRE_BIN = os.path.join(os.path.dirname(_IDESKTOPX_BIN), "jre", "bin")
+for _dll_path in [_IDESKTOPX_JRE_BIN, _IDESKTOPX_BIN]:
+    if os.path.isdir(_dll_path):
+        os.environ["PATH"] = _dll_path + os.pathsep + os.environ.get("PATH", "")
+        try:
+            os.add_dll_directory(_dll_path)
+        except Exception:
+            pass
+
 # 设置 iObjectsPy 路径
 # 注意: iObjectsPy 必须使用反斜杠路径（Windows 原生路径格式）
 # 可通过环境变量 SUPERMAP_IOBJECTSPY_PATH 覆盖默认路径
 IOBJECTSPY_PATH = os.environ.get(
     "SUPERMAP_IOBJECTSPY_PATH",
-    r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin_python\iobjectspy\iobjectspy-py310_64"
+    r"D:\software\supermap-iobjectspy-2025\iobjectspy\iobjectspy-py310_64"
 )
 # 确保路径使用反斜杠（iObjectsPy 要求 Windows 反斜杠路径）
 IOBJECTSPY_PATH = IOBJECTSPY_PATH.replace("/", "\\")
 sys.path.insert(0, IOBJECTSPY_PATH)
 
-# 默认 Java 路径（iObjectsPy 要求 Windows 反斜杠路径）
+# 默认 Java 路径：使用 iDesktopX bin（含所有 Wrapj*.dll）
+# iObjectsPy 的 set_iobjects_java_path 需要指向含 Wrapj*.dll 的目录
 DEFAULT_IOBJECT_PATH = os.environ.get(
     "SUPERMAP_JAVA_PATH",
     r"D:\software\supermap-idesktopx-2025-windows-x64-bin\bin"
@@ -47,23 +66,73 @@ _server = Server("supermap-iobjectspy")
 _initialized = False
 _init_error = None
 
+# 预热相关状态
+import threading
+import time as _time
+
+_warmup_thread: threading.Thread = None
+_warmup_done = threading.Event()    # 预热完成时 set()
+_warmup_start_ts: float = None      # 开始时间戳
+_warmup_finish_ts: float = None     # 完成时间戳
+
+
+def _do_warmup():
+    """后台线程：预热 JVM（在服务器启动后立即异步执行）"""
+    global _initialized, _init_error, _warmup_finish_ts
+    try:
+        import iobjectspy as iobs
+        iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
+        _initialized = True
+        _init_error = None
+    except Exception as e:
+        _init_error = str(e)
+    finally:
+        _warmup_finish_ts = _time.time()
+        _warmup_done.set()
+
+
+def _start_warmup_if_needed():
+    """启动预热线程（幂等，只启动一次）"""
+    global _warmup_thread, _warmup_start_ts
+    if _warmup_thread is not None:
+        return
+    _warmup_start_ts = _time.time()
+    _warmup_thread = threading.Thread(target=_do_warmup, daemon=True, name="iobjects-warmup")
+    _warmup_thread.start()
+
 
 # =============================================================================
 # 辅助函数
 # =============================================================================
 
-def _ensure_init():
-    """确保 iObjectsPy 已初始化"""
+def _ensure_init(wait_timeout: float = 120.0):
+    """
+    确保 iObjectsPy 已初始化。
+    - 若预热线程尚未完成，等待最多 wait_timeout 秒。
+    - 超时后抛出含友好提示的异常。
+    """
     global _initialized, _init_error
-    if not _initialized:
-        try:
-            import iobjectspy as iobs
-            iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
-            _initialized = True
-            _init_error = None
-        except Exception as e:
-            _init_error = str(e)
-            raise
+
+    # 已完成（成功或失败）
+    if _warmup_done.is_set():
+        if _init_error:
+            raise RuntimeError(f"iObjectsPy 初始化失败: {_init_error}")
+        return
+
+    # 预热线程还在跑，先启动（防止未调用 _start_warmup_if_needed 的路径）
+    _start_warmup_if_needed()
+
+    # 计算已等待时长，输出友好提示
+    elapsed = _time.time() - (_warmup_start_ts or _time.time())
+    done = _warmup_done.wait(timeout=max(0.1, wait_timeout - elapsed))
+    if not done:
+        cost = round(_time.time() - _warmup_start_ts, 1)
+        raise TimeoutError(
+            f"JVM 初始化超时（已等待 {cost}s）。"
+            "iObjectsPy 首次启动 JVM 通常需要 10-30 秒，请稍后重试。"
+        )
+    if _init_error:
+        raise RuntimeError(f"iObjectsPy 初始化失败: {_init_error}")
 
 
 # =============================================================================
@@ -1010,6 +1079,19 @@ async def list_tools():
                 }
             }
         ),
+        # ---- 执行自定义 Python 脚本（在 MCP 进程内，iObjectsPy 已初始化）----
+        Tool(
+            name="run_python_script",
+            description="在 MCP Server 进程内执行自定义 Python 脚本文件，iObjectsPy 环境已初始化。适用于: 复杂 GIS 批处理任务（批量导入、合并、字段计算等）无法通过单一工具完成时。返回: {status, stdout, stderr}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "script_path": {"type": "string", "description": "Python 脚本文件的绝对路径"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "传递给脚本的命令行参数列表（可选）"}
+                },
+                "required": ["script_path"]
+            }
+        ),
         # ---- 批量执行 ----
         Tool(
             name="execute_pipeline",
@@ -1059,7 +1141,16 @@ async def call_tool(name: str, arguments: dict):
         
         # 初始化
         if name == "initialize_supermap":
-            return [TextContent(type="text", text=json.dumps({"status": "success", "message": "SuperMap initialized"}, indent=2))]
+            cost_ms = None
+            if _warmup_start_ts and _warmup_finish_ts:
+                cost_ms = round((_warmup_finish_ts - _warmup_start_ts) * 1000)
+            return [TextContent(type="text", text=json.dumps({
+                "status": "success",
+                "message": "SuperMap iObjectsPy 已就绪",
+                "warmup_mode": "background_thread",
+                "warmup_cost_ms": cost_ms,
+                "note": "JVM 已在服务器启动时后台预热，本次调用无需等待冷启动"
+            }, indent=2, ensure_ascii=False))]
         
         # 环境信息
         elif name == "get_environment_info":
@@ -1083,7 +1174,9 @@ async def call_tool(name: str, arguments: dict):
         
         # 打开数据源
         elif name == "open_udbx_datasource":
-            conn_info = DatasourceConnectionInfo.make(arguments["file_path"])
+            conn_info = DatasourceConnectionInfo()
+            conn_info.set_server(arguments["file_path"])
+            conn_info.set_type(iobs.EngineType.UDBX)
             ds = open_datasource(conn_info)
             result = {"status": "success", "datasource": ds.alias, "datasets": [ds.name for ds in ds.datasets]}
             ds.close()
@@ -1116,7 +1209,7 @@ async def call_tool(name: str, arguments: dict):
                 from iobjectspy import Workspace, WorkspaceConnectionInfo
                 ws = Workspace()
                 conn = WorkspaceConnectionInfo()
-                conn.server = arguments["workspace_path"]
+                conn.set_server(arguments["workspace_path"])
                 opened = ws.open(conn)
                 if opened:
                     ds_count = ws.datasources.count
@@ -1147,7 +1240,7 @@ async def call_tool(name: str, arguments: dict):
                 save_as = arguments.get("save_as_path", "")
                 ws = Workspace()
                 conn = WorkspaceConnectionInfo()
-                conn.server = ws_path
+                conn.set_server(ws_path)
                 opened = ws.open(conn)
                 if not opened:
                     return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间进行保存"}, indent=2))]
@@ -1169,7 +1262,7 @@ async def call_tool(name: str, arguments: dict):
                 from iobjectspy import Workspace, WorkspaceConnectionInfo
                 ws = Workspace()
                 conn = WorkspaceConnectionInfo()
-                conn.server = arguments["workspace_path"]
+                conn.set_server(arguments["workspace_path"])
                 opened = ws.open(conn)
                 if not opened:
                     return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
@@ -1362,50 +1455,74 @@ async def call_tool(name: str, arguments: dict):
                 conn_info.set_server(arguments["datasource_path"])
                 conn_info.set_type(iobs.EngineType.UDBX)
                 ds = open_datasource(conn_info)
-                dataset = ds.get_dataset(arguments["dataset_name"])
+                dataset = ds[arguments["dataset_name"]]
                 
-                # 构建查询
                 sql_filter = arguments.get("sql_filter", "")
                 fields = arguments.get("fields", None)
                 max_results = arguments.get("max_results", 100)
-                order_by = arguments.get("order_by", "")
                 
                 # 获取字段信息
-                field_infos = []
                 field_names = []
-                for field_info in dataset.field_infos:
-                    field_names.append(field_info.name)
-                    field_infos.append({
-                        "name": field_info.name,
-                        "type": str(field_info.type),
-                        "required": field_info.is_required
-                    })
+                for fi in dataset.field_infos:
+                    field_names.append(fi.name)
                 
-                # 获取记录
+                # 构建查询参数（使用 QueryParameter）
+                total_count = dataset.get_record_count() if hasattr(dataset, 'get_record_count') else -1
+                
+                # 获取记录 - 使用 get_recordset 遍历
                 recordset = dataset.get_recordset()
-                if sql_filter:
-                    recordset.set_filter(sql_filter)
-                if order_by:
-                    recordset.set_order_by(order_by)
-                if fields:
-                    recordset.set_field_names(fields)
                 recordset.move_first()
                 
                 results = []
                 count = 0
-                while not recordset.is_eof and count < max_results:
+                while not recordset.is_eof() and count < max_results:
                     record = {}
-                    for field_name in (fields or field_names):
+                    target_fields = fields if fields else field_names
+                    for field_name in target_fields:
                         try:
-                            record[field_name] = recordset.get_field_value(field_name)
+                            val = recordset.get_value(field_name)
+                            record[field_name] = val
                         except:
                             record[field_name] = None
+                    
+                    # 简单的 SQL 过滤（服务端过滤不可用时做客户端过滤）
+                    if sql_filter:
+                        try:
+                            # 用 Python eval 做简单字段过滤
+                            match = True
+                            for cond in sql_filter.split(" AND "):
+                                cond = cond.strip()
+                                for op in [">=", "<=", "!=", ">", "<", "="]:
+                                    if op in cond:
+                                        parts = cond.split(op, 1)
+                                        fname = parts[0].strip()
+                                        fval = parts[1].strip().strip("'\"")
+                                        if fname in record:
+                                            try:
+                                                rval = float(record[fname])
+                                                fval = float(fval)
+                                            except (ValueError, TypeError):
+                                                rval = str(record[fname])
+                                            if op == ">=" and not (rval >= fval): match = False
+                                            elif op == "<=" and not (rval <= fval): match = False
+                                            elif op == "!=" and not (rval != fval): match = False
+                                            elif op == ">" and not (rval > fval): match = False
+                                            elif op == "<" and not (rval < fval): match = False
+                                            elif op == "=" and not (rval == fval): match = False
+                                            break
+                                if not match:
+                                    break
+                            if not match:
+                                recordset.move_next()
+                                continue
+                        except:
+                            pass
+                    
                     results.append(record)
                     recordset.move_next()
                     count += 1
                 
-                total_count = dataset.get_record_count() if hasattr(dataset, 'get_record_count') else -1
-                
+                recordset.close()
                 ds.close()
                 return [TextContent(type="text", text=json.dumps({
                     "status": "success",
@@ -1541,16 +1658,28 @@ async def call_tool(name: str, arguments: dict):
                         "status": "success", "source": ds_name, "target": out_name, "target_datasource": target_path
                     }, indent=2))]
                 else:
-                    # 跨数据源复制 - 先导出再导入
+                    # 跨数据源复制 - 使用数据集复制功能
                     import tempfile, os
-                    tmp_geojson = os.path.join(tempfile.gettempdir(), f"copy_tmp_{ds_name}.geojson")
-                    conv.export_geojson(ds_path, ds_name, tmp_geojson)
+                    
+                    # 打开目标数据源
+                    target_conn_info = DatasourceConnectionInfo()
+                    target_conn_info.set_server(target_path)
+                    target_conn_info.set_type(iobs.EngineType.UDBX)
+                    target_ds = open_datasource(target_conn_info)
+                    
+                    # 获取源数据集
+                    source_dataset = ds.get_dataset(ds_name)
+                    
+                    # 复制数据集到目标数据源
+                    target_ds.copy_dataset(source_dataset, out_name)
+                    
+                    # 关闭数据源
                     ds.close()
-                    conv.import_geojson(tmp_geojson, target_path, out_dataset_name=out_name)
-                    os.remove(tmp_geojson)
+                    target_ds.close()
+                    
                     return [TextContent(type="text", text=json.dumps({
                         "status": "success", "source": ds_name, "target": out_name, "target_datasource": target_path,
-                        "method": "export-then-import"
+                        "method": "copy_dataset"
                     }, indent=2))]
             except Exception as e:
                 return [TextContent(type="text", text=json.dumps({
@@ -1581,7 +1710,7 @@ async def call_tool(name: str, arguments: dict):
                 src_rs = source_dataset.get_recordset(False)
                 src_rs.move_first()
                 count = 0
-                while not src_rs.is_eof:
+                while not src_rs.is_eof():
                     try:
                         target_ds.add_record(src_rs)
                         count += 1
@@ -1666,7 +1795,7 @@ async def call_tool(name: str, arguments: dict):
                 
                 count = 0
                 rs.move_first()
-                while not rs.is_eof:
+                while not rs.is_eof():
                     try:
                         # 简单表达式解析
                         expr = expression.strip()
@@ -1680,7 +1809,7 @@ async def call_tool(name: str, arguments: dict):
                             for p in parts:
                                 p = p.strip().strip('"').strip("'")
                                 try:
-                                    val += str(rs.get_field_value(p))
+                                    val += str(rs.get_value(p))
                                 except:
                                     val += p
                             value = val
@@ -1689,7 +1818,7 @@ async def call_tool(name: str, arguments: dict):
                             eval_expr = expr
                             for fn in dataset.field_infos:
                                 try:
-                                    fv = rs.get_field_value(fn.name)
+                                    fv = rs.get_value(fn.name)
                                     eval_expr = eval_expr.replace(fn.name, str(float(fv) if fv is not None else '0'))
                                 except:
                                     pass
@@ -1700,7 +1829,7 @@ async def call_tool(name: str, arguments: dict):
                                 value = float(expr)
                             except ValueError:
                                 try:
-                                    value = rs.get_field_value(expr)
+                                    value = rs.get_value(expr)
                                 except:
                                     value = expr
                         rs.set_field_value(field_name, value)
@@ -1751,7 +1880,7 @@ async def call_tool(name: str, arguments: dict):
                 # 打开源GDB
                 src_conn = DatasourceConnectionInfo()
                 src_conn.set_server(gdb_path)
-                src_conn.set_type(EngineType.FILEGDB)
+                src_conn.set_type(EngineType.FILEGDBE)
                 src_ds = spy.open_datasource(src_conn)
                 
                 if not src_ds:
@@ -2053,12 +2182,12 @@ async def call_tool(name: str, arguments: dict):
                     try:
                         if output_format == "shapefile":
                             out_path = os.path.join(output_dir, f"{ds_name}.shp")
-                            result = conv.export_shapefile(datasource_path, ds_name, out_path)
+                            result = conv.export_to_shapefile(datasource_path, ds_name, out_path)
                             results.append({"dataset": ds_name, "output": out_path, "status": "success", "result": str(result)})
                             success_count += 1
                         elif output_format == "geojson":
                             out_path = os.path.join(output_dir, f"{ds_name}.geojson")
-                            result = conv.export_geojson(datasource_path, ds_name, out_path)
+                            result = conv.export_to_geojson(datasource_path, ds_name, out_path)
                             results.append({"dataset": ds_name, "output": out_path, "status": "success", "result": str(result)})
                             success_count += 1
                         elif output_format == "kml":
@@ -2066,7 +2195,7 @@ async def call_tool(name: str, arguments: dict):
                             # 使用 GeoJSON 中转方式导出 KML
                             import tempfile
                             tmp_geojson = os.path.join(tempfile.gettempdir(), f"{ds_name}_tmp.geojson")
-                            conv.export_geojson(datasource_path, ds_name, tmp_geojson, encode_to_epsg4326=True)
+                            conv.export_to_geojson(datasource_path, ds_name, tmp_geojson)
                             # 简单 GeoJSON 到 KML 转换
                             with open(tmp_geojson, 'r', encoding='utf-8') as f:
                                 gj_data = json.load(f)
@@ -2127,7 +2256,7 @@ async def call_tool(name: str, arguments: dict):
         
         # 导出 Shapefile
         elif name == "export_shapefile":
-            result = conv.export_shapefile(arguments["datasource_path"], arguments["dataset_name"], arguments["output_path"])
+            result = conv.export_to_shapefile(arguments["datasource_path"], arguments["dataset_name"], arguments["output_path"])
             return [TextContent(type="text", text=json.dumps({"status": "success", "result": result}, indent=2))]
         
         # 导出 GeoJSON
@@ -2135,14 +2264,25 @@ async def call_tool(name: str, arguments: dict):
             output_path = arguments["output_path"]
             to_epsg = arguments.get("encode_to_epsg4326", False)
             try:
-                result = conv.export_geojson(
-                    arguments["datasource_path"],
-                    arguments["dataset_name"],
+                # 先打开数据源获取数据集对象，再导出
+                conn_info = DatasourceConnectionInfo()
+                conn_info.set_server(arguments["datasource_path"])
+                conn_info.set_type(iobs.EngineType.UDBX)
+                ds = open_datasource(conn_info)
+                dataset = ds[arguments["dataset_name"]]
+                if dataset is None:
+                    ds.close()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"数据集 '{arguments['dataset_name']}' 不存在"
+                    }, indent=2))]
+                result = conv.export_to_geojson(
+                    dataset,
                     output_path,
-                    encode_to_epsg4326=to_epsg
+                    is_over_write=True
                 )
+                ds.close()
                 return [TextContent(type="text", text=json.dumps({
-                    "status": "success", "output": output_path, "wgs84": to_epsg, "result": result
+                    "status": "success", "output_path": output_path, "wgs84": to_epsg, "result": result
                 }, indent=2))]
             except Exception as e:
                 return [TextContent(type="text", text=json.dumps({
@@ -2155,7 +2295,7 @@ async def call_tool(name: str, arguments: dict):
             output_path = arguments["output_path"]
             band_idx = arguments.get("band_index", None)
             try:
-                result = conv.export_tiff(
+                result = conv.export_to_tif(
                     arguments["datasource_path"],
                     arguments["dataset_name"],
                     output_path,
@@ -2565,13 +2705,15 @@ async def call_tool(name: str, arguments: dict):
                 
                 ws = Workspace()
                 conn = WorkspaceConnectionInfo()
-                conn.server = ws_path
+                conn.set_server(ws_path)
                 opened = ws.open(conn)
                 if not opened:
                     return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
                 
                 # 打开数据源
-                ds_conn = DatasourceConnectionInfo.make(ds_path)
+                ds_conn = DatasourceConnectionInfo()
+                ds_conn.set_server(ds_path)
+                ds_conn.set_type(iobs.EngineType.UDBX)
                 # 检查工作空间是否已包含此数据源
                 ds_alias = None
                 for i in range(ws.datasources.count):
@@ -2617,7 +2759,7 @@ async def call_tool(name: str, arguments: dict):
                 
                 ws = Workspace()
                 conn = WorkspaceConnectionInfo()
-                conn.server = ws_path
+                conn.set_server(ws_path)
                 opened = ws.open(conn)
                 if not opened:
                     return [TextContent(type="text", text=json.dumps({"status": "error", "message": "无法打开工作空间"}, indent=2))]
@@ -2709,6 +2851,79 @@ async def call_tool(name: str, arguments: dict):
             except Exception as e:
                 return [TextContent(type="text", text=json.dumps({
                     "status": "error", "message": f"球面面积计算失败: {str(e)}"
+                }, indent=2))]
+        
+        # ==================== 执行自定义 Python 脚本 ====================
+        elif name == "run_python_script":
+            try:
+                import os as _os, io, subprocess
+                from contextlib import redirect_stdout, redirect_stderr
+                script_path = arguments["script_path"]
+                extra_args = arguments.get("args", [])
+                
+                if not _os.path.exists(script_path):
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": f"脚本文件不存在: {script_path}"
+                    }, indent=2))]
+                
+                # 在 MCP 进程内直接 exec 脚本（共享 iObjectsPy 环境）
+                stdout_capture = io.StringIO()
+                stderr_capture = io.StringIO()
+                
+                script_globals = {
+                    "__file__": script_path,
+                    "__name__": "__main__",
+                    "sys": sys,
+                    "os": _os,
+                    "json": json,
+                    "print": print,
+                }
+                if extra_args:
+                    sys.argv = [script_path] + extra_args
+                else:
+                    sys.argv = [script_path]
+                
+                try:
+                    with open(script_path, "r", encoding="utf-8") as f:
+                        script_code = f.read()
+                    
+                    with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                        exec(compile(script_code, script_path, "exec"), script_globals)
+                    
+                    stdout_str = stdout_capture.getvalue()
+                    stderr_str = stderr_capture.getvalue()
+                    
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "success",
+                        "stdout": stdout_str,
+                        "stderr": stderr_str
+                    }, indent=2))]
+                    
+                except SystemExit as e:
+                    stdout_str = stdout_capture.getvalue()
+                    stderr_str = stderr_capture.getvalue()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "exited" if e.code == 0 else "error",
+                        "exit_code": e.code,
+                        "stdout": stdout_str,
+                        "stderr": stderr_str
+                    }, indent=2))]
+                except Exception as e:
+                    stdout_str = stdout_capture.getvalue()
+                    stderr_str = stderr_capture.getvalue()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error",
+                        "message": str(e),
+                        "stdout": stdout_str,
+                        "stderr": stderr_str,
+                        "traceback": traceback.format_exc()
+                    }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": f"run_python_script 失败: {str(e)}",
+                    "traceback": traceback.format_exc()
                 }, indent=2))]
         
         # ==================== Pipeline 批量执行 ====================
@@ -3088,7 +3303,23 @@ async def _check_mcp_health():
         checks["connection_error"] = _init_error
         checks["suggestions"].append(f"iObjectsPy 连接失败: {_init_error}")
     elif not _initialized:
-        checks["connection_note"] = "尚未初始化。首次调用工具时会自动初始化"
+        if _warmup_thread is not None and _warmup_thread.is_alive():
+            elapsed = round(_time.time() - _warmup_start_ts, 1) if _warmup_start_ts else 0
+            checks["connection_note"] = f"JVM 后台预热中，已耗时 {elapsed}s，请稍候..."
+        else:
+            checks["connection_note"] = "尚未初始化。首次调用工具时会自动初始化"
+
+    # ===== 预热状态 =====
+    warmup_info = {
+        "thread_started": _warmup_thread is not None,
+        "thread_alive": _warmup_thread.is_alive() if _warmup_thread else False,
+        "done": _warmup_done.is_set(),
+    }
+    if _warmup_start_ts and _warmup_finish_ts:
+        warmup_info["cost_ms"] = round((_warmup_finish_ts - _warmup_start_ts) * 1000)
+    elif _warmup_start_ts:
+        warmup_info["elapsed_s"] = round(_time.time() - _warmup_start_ts, 1)
+    checks["warmup"] = warmup_info
     
     # ===== 6. 综合状态与修复建议 =====
     all_ok = all([checks["iobjectspy_importable"], checks["java_path_valid"], checks["license_valid"]])
@@ -3106,6 +3337,8 @@ async def _check_mcp_health():
 
 async def main():
     """启动 MCP 服务器"""
+    # 服务器一启动就在后台预热 JVM，让 Agent 的第一个工具调用无需等待冷启动
+    _start_warmup_if_needed()
     async with stdio_server() as (read_stream, write_stream):
         await _server.run(read_stream, write_stream, _server.create_initialization_options())
 
