@@ -1,7 +1,7 @@
 {
   "name": "supermap-mcp-server",
-  "version": "2.0.0",
-  "description": "SuperMap iObjectsPy MCP Server - 53 GIS automation tools (iDesktopX + iServer REST API)",
+  "version": "4.2.0",
+  "description": "SuperMap iObjectsPy MCP Server - 69 GIS automation tools (iDesktopX + iServer REST API)",
   "author": "kruie",
   "license": "MIT",
   "type": "mcp-server",
@@ -45,10 +45,18 @@
     "SUPERMAP_HOME": {
       "description": "Path to iObjectsPy installation directory",
       "required": false
+    },
+    "SUPERMAP_IOBJECTSPY_PATH": {
+      "description": "Path to iObjectsPy Python package (iobjectspy-py310_64)",
+      "required": false
+    },
+    "SUPERMAP_IDESKTOPX_BIN": {
+      "description": "Path to iDesktopX bin directory (contains Wrapj*.dll and jre/)",
+      "required": false
     }
   },
   "tools": {
-    "count": 53,
+    "count": 69,
     "categories": [
       {
         "name": "Initialization & Environment",
@@ -60,15 +68,19 @@
       },
       {
         "name": "Dataset Management",
-        "tools": ["list_datasets", "get_dataset_info"]
+        "tools": ["list_datasets", "get_dataset_info", "query_dataset", "delete_dataset", "create_dataset", "copy_dataset", "append_to_dataset", "add_field", "calculate_field"]
       },
       {
         "name": "Data Import",
-        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm"]
+        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm", "batch_import"]
       },
       {
         "name": "Data Export",
-        "tools": ["export_shapefile", "export_geojson", "export_tiff"]
+        "tools": ["export_shapefile", "export_geojson", "export_tiff", "batch_export"]
+      },
+      {
+        "name": "Workspace & Datasource",
+        "tools": ["open_workspace", "save_workspace", "get_workspace_info", "get_coordinate_system", "reproject_dataset"]
       },
       {
         "name": "Dataset Operations",
@@ -100,7 +112,7 @@
       },
       {
         "name": "Map Cartography",
-        "tools": ["create_map", "list_maps", "get_map_info"]
+        "tools": ["create_map", "list_maps", "get_map_info", "add_layer_to_map", "export_map_image", "generate_map_tiles"]
       },
       {
         "name": "Utility Functions",
