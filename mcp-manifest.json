@@ -1,0 +1,131 @@
+{
+  "name": "supermap-mcp-server",
+  "version": "4.2.0",
+  "description": "SuperMap iObjectsPy MCP Server - 69 GIS automation tools (iDesktopX + iServer REST API)",
+  "author": "kruie",
+  "license": "MIT",
+  "type": "mcp-server",
+  "runtime": {
+    "type": "python",
+    "version": ">=3.10.0",
+    "entry": "supermap_mcp_server.py"
+  },
+  "dependencies": [
+    {
+      "name": "iObjectsPy",
+      "version": ">=11.1.0",
+      "system": true
+    },
+    {
+      "name": "mcp",
+      "version": ">=1.0.0",
+      "pip": true
+    },
+    {
+      "name": "numpy",
+      "version": ">=1.24.0",
+      "pip": true
+    },
+    {
+      "name": "pandas",
+      "version": ">=2.0.0",
+      "pip": true
+    },
+    {
+      "name": "requests",
+      "version": ">=2.28.0",
+      "pip": true
+    }
+  ],
+  "environment": {
+    "SUPERMAP_LICENSE": {
+      "description": "Path to SuperMap license file",
+      "required": true
+    },
+    "SUPERMAP_HOME": {
+      "description": "Path to iObjectsPy installation directory",
+      "required": false
+    },
+    "SUPERMAP_IOBJECTSPY_PATH": {
+      "description": "Path to iObjectsPy Python package (iobjectspy-py310_64)",
+      "required": false
+    },
+    "SUPERMAP_IDESKTOPX_BIN": {
+      "description": "Path to iDesktopX bin directory (contains Wrapj*.dll and jre/)",
+      "required": false
+    }
+  },
+  "tools": {
+    "count": 69,
+    "categories": [
+      {
+        "name": "Initialization & Environment",
+        "tools": ["initialize_supermap", "get_environment_info", "check_mcp_health"]
+      },
+      {
+        "name": "Datasource Management",
+        "tools": ["open_udbx_datasource", "create_udbx_datasource", "create_memory_datasource"]
+      },
+      {
+        "name": "Dataset Management",
+        "tools": ["list_datasets", "get_dataset_info", "query_dataset", "delete_dataset", "create_dataset", "copy_dataset", "append_to_dataset", "add_field", "calculate_field"]
+      },
+      {
+        "name": "Data Import",
+        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm", "batch_import"]
+      },
+      {
+        "name": "Data Export",
+        "tools": ["export_shapefile", "export_geojson", "export_tiff", "batch_export"]
+      },
+      {
+        "name": "Workspace & Datasource",
+        "tools": ["open_workspace", "save_workspace", "get_workspace_info", "get_coordinate_system", "reproject_dataset"]
+      },
+      {
+        "name": "Dataset Operations",
+        "tools": ["dataset_point_to_line", "dataset_line_to_region", "dataset_region_to_line", "dissolve"]
+      },
+      {
+        "name": "Spatial Analysis",
+        "tools": ["create_buffer", "create_multi_buffer", "overlay", "clip_data"]
+      },
+      {
+        "name": "Raster Analysis",
+        "tools": ["calculate_slope", "calculate_aspect", "calculate_hillshade"]
+      },
+      {
+        "name": "Interpolation",
+        "tools": ["idw_interpolate", "kriging_interpolate"]
+      },
+      {
+        "name": "Density Analysis",
+        "tools": ["kernel_density"]
+      },
+      {
+        "name": "Hydrology Analysis",
+        "tools": ["fill_sink", "watershed"]
+      },
+      {
+        "name": "Other Analysis",
+        "tools": ["create_thiessen_polygons", "aggregate_points", "reclassify"]
+      },
+      {
+        "name": "Map Cartography",
+        "tools": ["create_map", "list_maps", "get_map_info", "add_layer_to_map", "export_map_image", "generate_map_tiles"]
+      },
+      {
+        "name": "Utility Functions",
+        "tools": ["compute_distance", "compute_geodesic_area"]
+      },
+      {
+        "name": "iServer REST API",
+        "tools": ["iserver_get_service_list", "iserver_get_service_status", "iserver_start_service", "iserver_stop_service", "iserver_restart_service", "iserver_get_map_info", "iserver_query_data", "iserver_clear_cache", "iserver_publish_map_service", "iserver_get_token"]
+      }
+    ]
+  },
+  "skills": [
+    "supermap-idesktop-skill",
+    "supermap-iserver-skill"
+  ]
+}
