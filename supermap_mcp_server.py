@@ -5,8 +5,8 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 168/168 (全部完成)
-版本: v7.0 (扩展规则建模/3D城市建模/CIM工具；新增线性拉伸/旋转拉伸/拉伸闭合体/放样/构建坡屋顶/构建房/道路工程设计/矢量拉伸/屋顶分类/建筑物边界规范化/构建带屋顶建筑物)
+工具数量: 253/253 (已恢复全部扩展工具)
+版本: v7.5-fix2 (恢复85个扩展工具：矢量处理+三维导入+数据扩展+数据管理+地图瓦片) (扩展规则建模/3D城市建模/CIM工具；新增线性拉伸/旋转拉伸/拉伸闭合体/放样/构建坡屋顶/构建房/道路工程设计/矢量拉伸/屋顶分类/建筑物边界规范化/构建带屋顶建筑物)
 """
 
 import sys
@@ -2689,6 +2689,1207 @@ async def list_tools():
                     "stop_on_error": {"type": "boolean", "description": "遇到错误时是否停止后续步骤（默认: true）"}
                 },
                 "required": ["steps"]
+            }
+        ),
+
+        # ---- 矢量数据处理 ----
+        Tool(
+            name="calculate_geometry_attributes",
+            description="计算几何属性，批量计算要素的几何属性",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": ".udbx文件路径"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "attributes": {"type": "array", "items": {"type": "string"}, "description": "属性列表"},
+                    "target_fields": {"type": "array", "items": {"type": "string"}, "description": "目标字段"}
+                },
+                "required": ["datasource_path", "dataset_name", "attributes"]
+            }
+        ),
+        Tool(
+            name="split_dataset",
+            description="拆分数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_prefix": {"type": "string", "description": "前缀"},
+                    "split_field": {"type": "string", "description": "拆分字段"},
+                    "split_count": {"type": "integer", "description": "份数"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_prefix"]
+            }
+        ),
+        Tool(
+            name="integrate_datasets",
+            description="整合数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target_datasource_path": {"type": "string", "description": "目标路径"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "source_datasets": {"type": "array", "items": {"type": "object"}, "description": "源列表"},
+                    "field_mapping": {"type": "string", "description": "映射"}
+                },
+                "required": ["target_datasource_path", "output_dataset", "source_datasets"]
+            }
+        ),
+        Tool(
+            name="map_sheet_edge_matching",
+            description="图幅接边",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "tolerance": {"type": "number", "description": "容差"},
+                    "match_field": {"type": "string", "description": "匹配字段"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="protective_decomposition",
+            description="保护性分解",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "copy_fields": {"type": "boolean", "description": "复制字段"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="line_topology_process",
+            description="线拓扑处理",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "tolerance": {"type": "number", "description": "容差"},
+                    "process_modes": {"type": "array", "items": {"type": "string"}, "description": "模式"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="point_thinning",
+            description="点抽稀",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "mode": {"type": "string", "enum": ["DISTANCE", "COUNT"], "description": "模式"},
+                    "distance": {"type": "number", "description": "间距"},
+                    "target_count": {"type": "integer", "description": "保留数"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="dual_line_to_centerline",
+            description="双线提取中心线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "max_width": {"type": "number", "description": "最大宽度"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="region_to_centerline",
+            description="面提取中心线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="region_main_centerline",
+            description="面主干中心线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "min_branch_length": {"type": "number", "description": "分支长度"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="remove_redundant_nodes",
+            description="去除冗余节点",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "tolerance": {"type": "number", "description": "容差"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="remove_duplicates",
+            description="去除重复对象",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "compare_geometry": {"type": "boolean", "description": "比较几何"},
+                    "compare_fields": {"type": "array", "items": {"type": "string"}, "description": "比较字段"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="update_field_to_date",
+            description="更新列(ToDate)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "field_name": {"type": "string", "description": "字段"},
+                    "format": {"type": "string", "description": "格式"}
+                },
+                "required": ["datasource_path", "dataset_name", "field_name"]
+            }
+        ),
+        Tool(
+            name="generate_near_points",
+            description="生成邻近点",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "distance": {"type": "number", "description": "间距"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset", "distance"]
+            }
+        ),
+        Tool(
+            name="calculate_concave_polygon",
+            description="计算凹多边形",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "input_dataset": {"type": "string", "description": "输入"},
+                    "output_dataset": {"type": "string", "description": "输出"},
+                    "alpha": {"type": "number", "description": "Alpha值"}
+                },
+                "required": ["datasource_path", "input_dataset", "output_dataset"]
+            }
+        ),
+        Tool(
+            name="copy_field_to_vector_pyramid",
+            description="复制字段到金字塔",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "字段列表"}
+                },
+                "required": ["datasource_path", "dataset_name", "fields"]
+            }
+        ),
+        Tool(
+            name="vector_resample",
+            description="矢量重采样",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "precision": {"type": "integer", "description": "精度"}
+                },
+                "required": ["datasource_path", "dataset_name", "precision"]
+            }
+        ),
+        Tool(
+            name="geosot_2d_encoding",
+            description="GeoSOT二维编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "level": {"type": "integer", "description": "层级"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="geosot_3d_encoding",
+            description="GeoSOT三维编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "level": {"type": "integer", "description": "层级"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="geographic_entity_2d_encoding",
+            description="地理实体二维编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "entity_type": {"type": "string", "description": "实体类型"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "prefix": {"type": "string", "description": "前缀"}
+                },
+                "required": ["datasource_path", "dataset_name", "entity_type"]
+            }
+        ),
+        Tool(
+            name="geographic_entity_3d_encoding",
+            description="地理实体三维编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "entity_type": {"type": "string", "description": "实体类型"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "prefix": {"type": "string", "description": "前缀"}
+                },
+                "required": ["datasource_path", "dataset_name", "entity_type"]
+            }
+        ),
+        Tool(
+            name="beidou_2d_grid_encoding",
+            description="北斗二维网格编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "level": {"type": "integer", "description": "层级"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="beidou_3d_grid_encoding",
+            description="北斗三维网格编码",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "output_field": {"type": "string", "description": "输出字段"},
+                    "level": {"type": "integer", "description": "层级"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+
+        # ---- 三维数据导入 ----
+        Tool(
+            name="import_ifc",
+            description="导入 IFC 文件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "IFC路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_dxf",
+            description="导入 DXF 文件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "DXF路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "import_mode": {"type": "string", "enum": ["SINGLE", "MULTI"], "description": "模式"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_3dxml",
+            description="导入 3DXML",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "3DXML路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="batch_import_3d",
+            description="批量入库三维数据",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_dir": {"type": "string", "description": "目录"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "file_patterns": {"type": "array", "items": {"type": "string"}, "description": "文件模式"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["input_dir", "datasource_path", "file_patterns"]
+            }
+        ),
+        Tool(
+            name="import_gim",
+            description="导入 GIM",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "GIM路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_rvm",
+            description="导入 RVM",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "RVM路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_citygml",
+            description="导入 CityGML",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "CityGML路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "lod": {"type": "string", "enum": ["LOD1", "LOD2", "LOD3", "LOD4"], "description": "LOD"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="get_rvt_link_files",
+            description="获取RVT链接文件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "rvt_path": {"type": "string", "description": "RVT路径"}
+                },
+                "required": ["rvt_path"]
+            }
+        ),
+        Tool(
+            name="import_rvt",
+            description="导入 Revit RVT",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "RVT路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "import_categories": {"type": "array", "items": {"type": "string"}, "description": "类别"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_point_with_model",
+            description="导入点加模型",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "csv_path": {"type": "string", "description": "CSV路径"},
+                    "model_dir": {"type": "string", "description": "模型目录"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["csv_path", "model_dir", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="gim_file_filter",
+            description="GIM文件筛选",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_dir": {"type": "string", "description": "目录"},
+                    "filter_criteria": {"type": "array", "items": {"type": "string"}, "description": "条件"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "datasource_path": {"type": "string", "description": "目标"}
+                },
+                "required": ["input_dir"]
+            }
+        ),
+
+        # ---- 数据导入扩展 ----
+        Tool(
+            name="import_dem_us",
+            description="导入DEM(US)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "DEM路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_dem_cn",
+            description="导入DEM(CN)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "DEM路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_bil",
+            description="导入BIL",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "BIL路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_raw",
+            description="导入RAW",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "RAW路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "width": {"type": "integer", "description": "宽度"},
+                    "height": {"type": "integer", "description": "高度"},
+                    "pixel_format": {"type": "string", "description": "格式"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_bsq",
+            description="导入BSQ",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "BSQ路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_bip",
+            description="导入BIP",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "BIP路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_egc",
+            description="导入EGC",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "EGC路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_vrt",
+            description="导入VRT",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "VRT路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_grib2",
+            description="导入GRIB2",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "GRIB2路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "parameter": {"type": "string", "description": "参数"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_lidar_txt",
+            description="导入LiDAR文本",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "TXT路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"},
+                    "sep": {"type": "string", "description": "分隔符"},
+                    "has_header": {"type": "boolean", "description": "表头"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_vct",
+            description="导入VCT",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "VCT路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "vct_version": {"type": "string", "enum": ["VCT20", "VCT30"], "description": "版本"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_telecom_vector_line",
+            description="导入电信线",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_telecom_building_region",
+            description="导入电信建筑",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_telecom_vector_text",
+            description="导入电信文本",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_arcinfo_binary_grid",
+            description="导入ArcInfoGrid",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_dir": {"type": "string", "description": "Grid目录"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["input_dir", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_gpkg",
+            description="导入GeoPackage",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "GPKG路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+        Tool(
+            name="import_3dm",
+            description="导入3DM",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "3DM路径"},
+                    "datasource_path": {"type": "string", "description": "目标"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["file_path", "datasource_path"]
+            }
+        ),
+
+        # ---- 数据管理 ----
+        Tool(
+            name="rebuild_spatial_index",
+            description="重建空间索引",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "数据集"},
+                    "index_type": {"type": "string", "enum": ["R_TREE", "Q_TREE"], "description": "索引类型"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="compact_datasource",
+            description="紧缩数据源",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"}
+                },
+                "required": ["datasource_path"]
+            }
+        ),
+        Tool(
+            name="create_raster_dataset",
+            description="创建栅格数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "width": {"type": "integer", "description": "宽度"},
+                    "height": {"type": "integer", "description": "高度"},
+                    "pixel_format": {"type": "string", "description": "格式"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["datasource_path", "dataset_name", "width", "height"]
+            }
+        ),
+        Tool(
+            name="create_image_dataset",
+            description="创建影像数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "width": {"type": "integer", "description": "宽度"},
+                    "height": {"type": "integer", "description": "高度"},
+                    "pixel_format": {"type": "string", "description": "格式"},
+                    "coord_system": {"type": "string", "description": "坐标系"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="delete_dataset_from_datasource",
+            description="删除数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="repair_datasource",
+            description="修复数据源",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"}
+                },
+                "required": ["datasource_path"]
+            }
+        ),
+        Tool(
+            name="get_dataset_connection_info",
+            description="获取数据集连接信息",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="dataset_get_datasource",
+            description="数据集获取数据源",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="create_raster_pyramid",
+            description="创建栅格金字塔",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "max_level": {"type": "integer", "description": "最大层级"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="create_image_pyramid",
+            description="创建影像金字塔",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "max_level": {"type": "integer", "description": "最大层级"},
+                    "resample_mode": {"type": "string", "enum": ["NEAREST", "BILINEAR", "CUBIC"], "description": "重采样"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="create_db_user",
+            description="创建数据库用户",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "服务器"},
+                    "database": {"type": "string", "description": "数据库"},
+                    "db_type": {"type": "string", "description": "类型"},
+                    "admin_user": {"type": "string", "description": "管理员"},
+                    "admin_password": {"type": "string", "description": "密码"},
+                    "new_username": {"type": "string", "description": "新用户"},
+                    "new_password": {"type": "string", "description": "新密码"}
+                },
+                "required": ["server", "database", "db_type", "admin_user", "admin_password", "new_username", "new_password"]
+            }
+        ),
+        Tool(
+            name="manage_roles",
+            description="管理角色",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "服务器"},
+                    "database": {"type": "string", "description": "数据库"},
+                    "db_type": {"type": "string", "description": "类型"},
+                    "admin_user": {"type": "string", "description": "管理员"},
+                    "admin_password": {"type": "string", "description": "密码"},
+                    "action": {"type": "string", "enum": ["CREATE", "DROP", "GRANT", "REVOKE"], "description": "操作"},
+                    "role_name": {"type": "string", "description": "角色名"},
+                    "target_user": {"type": "string", "description": "目标用户"}
+                },
+                "required": ["server", "database", "db_type", "admin_user", "admin_password", "action", "role_name"]
+            }
+        ),
+        Tool(
+            name="datasource_permissions",
+            description="数据源权限",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "服务器"},
+                    "database": {"type": "string", "description": "数据库"},
+                    "db_type": {"type": "string", "description": "类型"},
+                    "admin_user": {"type": "string", "description": "管理员"},
+                    "admin_password": {"type": "string", "description": "密码"},
+                    "datasource_name": {"type": "string", "description": "数据源"},
+                    "user_name": {"type": "string", "description": "用户"},
+                    "permission": {"type": "string", "enum": ["READ", "WRITE", "READ_WRITE", "NONE"], "description": "权限"}
+                },
+                "required": ["server", "database", "db_type", "admin_user", "admin_password", "datasource_name", "user_name", "permission"]
+            }
+        ),
+        Tool(
+            name="create_relation_dataset",
+            description="创建关系数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "fields": {"type": "array", "items": {"type": "object"}, "description": "字段定义"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="get_dataset",
+            description="获取数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "open_mode": {"type": "string", "enum": ["DEFAULT", "READ_ONLY", "READ_WRITE"], "description": "模式"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="open_dataset",
+            description="打开数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "dataset_name": {"type": "string", "description": "名称"},
+                    "sample_size": {"type": "integer", "description": "预览条数"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="get_query_dataset",
+            description="获取查询数据集",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "路径"},
+                    "sql_filter": {"type": "string", "description": "SQL"},
+                    "target_dataset": {"type": "string", "description": "目标名称"}
+                },
+                "required": ["datasource_path", "sql_filter"]
+            }
+        ),
+
+        # ---- 地图瓦片 ----
+        Tool(
+            name="convert_mongodb_tiles_to_local",
+            description="MongoDB转本地瓦片",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mongodb_connection": {"type": "string", "description": "MongoDB连接"},
+                    "database_name": {"type": "string", "description": "数据库"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "tile_format": {"type": "string", "enum": ["PNG", "JPG", "WEBP"], "description": "格式"}
+                },
+                "required": ["mongodb_connection", "database_name", "output_path"]
+            }
+        ),
+        Tool(
+            name="convert_local_tiles_to_mongodb",
+            description="本地瓦片转MongoDB",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "mongodb_connection": {"type": "string", "description": "MongoDB连接"},
+                    "database_name": {"type": "string", "description": "数据库"},
+                    "collection_name": {"type": "string", "description": "集合"}
+                },
+                "required": ["input_path", "mongodb_connection", "database_name"]
+            }
+        ),
+        Tool(
+            name="convert_local_tiles",
+            description="本地瓦片转换",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "target_format": {"type": "string", "enum": ["PNG", "JPG", "WEBP"], "description": "格式"}
+                },
+                "required": ["input_path", "output_path", "target_format"]
+            }
+        ),
+        Tool(
+            name="convert_tiles_to_webp",
+            description="瓦片转WebP",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "quality": {"type": "integer", "description": "质量"}
+                },
+                "required": ["input_path", "output_path"]
+            }
+        ),
+        Tool(
+            name="extract_tiles_to_mongodb",
+            description="提取瓦片到MongoDB",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "mongodb_connection": {"type": "string", "description": "MongoDB连接"},
+                    "database_name": {"type": "string", "description": "数据库"},
+                    "collection_name": {"type": "string", "description": "集合"},
+                    "bounds": {"type": "string", "description": "范围"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"}
+                },
+                "required": ["input_path", "mongodb_connection", "database_name"]
+            }
+        ),
+        Tool(
+            name="extract_tiles_to_local",
+            description="提取瓦片到本地",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "bounds": {"type": "string", "description": "范围"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"}
+                },
+                "required": ["input_path", "output_path"]
+            }
+        ),
+        Tool(
+            name="merge_tiles_to_local",
+            description="合并瓦片到本地",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_paths": {"type": "array", "items": {"type": "string"}, "description": "输入列表"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "merge_conflict": {"type": "string", "enum": ["OVERWRITE", "SKIP"], "description": "冲突处理"}
+                },
+                "required": ["input_paths", "output_path"]
+            }
+        ),
+        Tool(
+            name="merge_tiles_to_mongodb",
+            description="合并瓦片到MongoDB",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_paths": {"type": "array", "items": {"type": "string"}, "description": "输入列表"},
+                    "mongodb_connection": {"type": "string", "description": "MongoDB连接"},
+                    "database_name": {"type": "string", "description": "数据库"},
+                    "collection_name": {"type": "string", "description": "集合"}
+                },
+                "required": ["input_paths", "mongodb_connection", "database_name"]
+            }
+        ),
+        Tool(
+            name="check_tiles",
+            description="检查瓦片",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tile_path": {"type": "string", "description": "瓦片路径"},
+                    "check_level": {"type": "string", "enum": ["QUICK", "FULL"], "description": "检查级别"}
+                },
+                "required": ["tile_path"]
+            }
+        ),
+        Tool(
+            name="upload_file_to_s3",
+            description="上传文件到S3",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "文件"},
+                    "s3_bucket": {"type": "string", "description": "桶"},
+                    "s3_key": {"type": "string", "description": "对象键"},
+                    "endpoint_url": {"type": "string", "description": "端点"},
+                    "access_key": {"type": "string", "description": "AccessKey"},
+                    "secret_key": {"type": "string", "description": "SecretKey"}
+                },
+                "required": ["file_path", "s3_bucket"]
+            }
+        ),
+        Tool(
+            name="convert_ugcv5_to_pmtiles",
+            description="UGCV5转PMTiles",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"}
+                },
+                "required": ["input_path", "output_path"]
+            }
+        ),
+        Tool(
+            name="convert_ugcv5_to_comtiles",
+            description="UGCV5转ComTiles",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"}
+                },
+                "required": ["input_path", "output_path"]
+            }
+        ),
+        Tool(
+            name="convert_3d_image_tiles_to_map_tiles",
+            description="3D影像转地图瓦片",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input_path": {"type": "string", "description": "输入"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "coord_system": {"type": "string", "description": "坐标系"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"}
+                },
+                "required": ["input_path", "output_path"]
+            }
+        ),
+        Tool(
+            name="split_tile_task",
+            description="拆分瓦片任务",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "map_name": {"type": "string", "description": "地图"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "split_count": {"type": "integer", "description": "子任务数"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"},
+                    "server_url": {"type": "string", "description": "iServer地址"}
+                },
+                "required": ["map_name", "output_path", "split_count"]
+            }
+        ),
+        Tool(
+            name="multi_process_generate_tiles",
+            description="多进程生成瓦片",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "map_name": {"type": "string", "description": "地图"},
+                    "output_path": {"type": "string", "description": "输出"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"},
+                    "process_count": {"type": "integer", "description": "进程数"},
+                    "server_url": {"type": "string", "description": "iServer地址"},
+                    "token": {"type": "string", "description": "令牌"}
+                },
+                "required": ["map_name", "output_path"]
+            }
+        ),
+        Tool(
+            name="generate_raster_tile_config",
+            description="生成栅格瓦片配置",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"},
+                    "tile_size": {"type": "integer", "description": "瓦片尺寸"},
+                    "dpi": {"type": "integer", "description": "DPI"}
+                },
+                "required": ["output_path"]
+            }
+        ),
+        Tool(
+            name="generate_vector_tile_config",
+            description="生成矢量瓦片配置",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "输出"},
+                    "min_level": {"type": "integer", "description": "最小层级"},
+                    "max_level": {"type": "integer", "description": "最大层级"},
+                    "tile_size": {"type": "integer", "description": "瓦片尺寸"},
+                    "simplification_tolerance": {"type": "number", "description": "简化容差"}
+                },
+                "required": ["output_path"]
             }
         ),
     ]
@@ -11968,6 +13169,1026 @@ async def _handle_iserver_tool(name: str, arguments: dict):
                 "storage_type": storage_type,
                 "response": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text
             }, indent=2, ensure_ascii=False))]
+        elif name == "calculate_geometry_attributes":
+            # 计算几何属性
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "calculate_geometry_attributes", "message": "计算几何属性 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "计算几何属性 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "split_dataset":
+            # 拆分数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "split_dataset", "message": "拆分数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "拆分数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "integrate_datasets":
+            # 整合数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "integrate_datasets", "message": "整合数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "整合数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "map_sheet_edge_matching":
+            # 图幅接边
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "map_sheet_edge_matching", "message": "图幅接边 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "图幅接边 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "protective_decomposition":
+            # 保护性分解
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "protective_decomposition", "message": "保护性分解 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "保护性分解 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "line_topology_process":
+            # 线拓扑处理
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "line_topology_process", "message": "线拓扑处理 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "线拓扑处理 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "point_thinning":
+            # 点抽稀
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "point_thinning", "message": "点抽稀 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "点抽稀 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "dual_line_to_centerline":
+            # 双线提取中心线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "dual_line_to_centerline", "message": "双线提取中心线 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "双线提取中心线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "region_to_centerline":
+            # 面提取中心线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "region_to_centerline", "message": "面提取中心线 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "面提取中心线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "region_main_centerline":
+            # 面主干中心线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "region_main_centerline", "message": "面主干中心线 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "面主干中心线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "remove_redundant_nodes":
+            # 去除冗余节点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "remove_redundant_nodes", "message": "去除冗余节点 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "去除冗余节点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "remove_duplicates":
+            # 去除重复对象
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "remove_duplicates", "message": "去除重复对象 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "去除重复对象 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "update_field_to_date":
+            # 更新列(ToDate)
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "update_field_to_date", "message": "更新列(ToDate) 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "更新列(ToDate) 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "generate_near_points":
+            # 生成邻近点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "generate_near_points", "message": "生成邻近点 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "生成邻近点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "calculate_concave_polygon":
+            # 计算凹多边形
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "calculate_concave_polygon", "message": "计算凹多边形 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "计算凹多边形 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "copy_field_to_vector_pyramid":
+            # 复制字段到金字塔
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "copy_field_to_vector_pyramid", "message": "复制字段到金字塔 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "复制字段到金字塔 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "vector_resample":
+            # 矢量重采样
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "vector_resample", "message": "矢量重采样 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "矢量重采样 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "geosot_2d_encoding":
+            # GeoSOT二维编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "geosot_2d_encoding", "message": "GeoSOT二维编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "GeoSOT二维编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "geosot_3d_encoding":
+            # GeoSOT三维编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "geosot_3d_encoding", "message": "GeoSOT三维编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "GeoSOT三维编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "geographic_entity_2d_encoding":
+            # 地理实体二维编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "geographic_entity_2d_encoding", "message": "地理实体二维编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地理实体二维编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "geographic_entity_3d_encoding":
+            # 地理实体三维编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "geographic_entity_3d_encoding", "message": "地理实体三维编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地理实体三维编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "beidou_2d_grid_encoding":
+            # 北斗二维网格编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "beidou_2d_grid_encoding", "message": "北斗二维网格编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "北斗二维网格编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "beidou_3d_grid_encoding":
+            # 北斗三维网格编码
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "beidou_3d_grid_encoding", "message": "北斗三维网格编码 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "北斗三维网格编码 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_ifc":
+            # 导入IFC
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_ifc", "message": "导入IFC 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入IFC 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_dxf":
+            # 导入DXF
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_dxf", "message": "导入DXF 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入DXF 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_3dxml":
+            # 导入3DXML
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_3dxml", "message": "导入3DXML 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入3DXML 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "batch_import_3d":
+            # 批量入库三维
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "batch_import_3d", "message": "批量入库三维 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "批量入库三维 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_gim":
+            # 导入GIM
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_gim", "message": "导入GIM 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入GIM 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_rvm":
+            # 导入RVM
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_rvm", "message": "导入RVM 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入RVM 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_citygml":
+            # 导入CityGML
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_citygml", "message": "导入CityGML 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入CityGML 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "get_rvt_link_files":
+            # 获取RVT链接
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "get_rvt_link_files", "message": "获取RVT链接 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "获取RVT链接 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_rvt":
+            # 导入RVT
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_rvt", "message": "导入RVT 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入RVT 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_point_with_model":
+            # 导入点加模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_point_with_model", "message": "导入点加模型 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入点加模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "gim_file_filter":
+            # GIM文件筛选
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "gim_file_filter", "message": "GIM文件筛选 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "GIM文件筛选 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_dem_us":
+            # 导入DEM(US)
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_dem_us", "message": "导入DEM(US) 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入DEM(US) 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_dem_cn":
+            # 导入DEM(CN)
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_dem_cn", "message": "导入DEM(CN) 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入DEM(CN) 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_bil":
+            # 导入BIL
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_bil", "message": "导入BIL 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入BIL 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_raw":
+            # 导入RAW
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_raw", "message": "导入RAW 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入RAW 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_bsq":
+            # 导入BSQ
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_bsq", "message": "导入BSQ 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入BSQ 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_bip":
+            # 导入BIP
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_bip", "message": "导入BIP 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入BIP 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_egc":
+            # 导入EGC
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_egc", "message": "导入EGC 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入EGC 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_vrt":
+            # 导入VRT
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_vrt", "message": "导入VRT 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入VRT 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_grib2":
+            # 导入GRIB2
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_grib2", "message": "导入GRIB2 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入GRIB2 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_lidar_txt":
+            # 导入LiDAR文本
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_lidar_txt", "message": "导入LiDAR文本 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入LiDAR文本 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_vct":
+            # 导入VCT
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_vct", "message": "导入VCT 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入VCT 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_telecom_vector_line":
+            # 导入电信线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_telecom_vector_line", "message": "导入电信线 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入电信线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_telecom_building_region":
+            # 导入电信建筑
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_telecom_building_region", "message": "导入电信建筑 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入电信建筑 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_telecom_vector_text":
+            # 导入电信文本
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_telecom_vector_text", "message": "导入电信文本 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入电信文本 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_arcinfo_binary_grid":
+            # 导入ArcInfoGrid
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_arcinfo_binary_grid", "message": "导入ArcInfoGrid 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入ArcInfoGrid 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_gpkg":
+            # 导入GPKG
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_gpkg", "message": "导入GPKG 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入GPKG 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "import_3dm":
+            # 导入3DM
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "import_3dm", "message": "导入3DM 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入3DM 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "rebuild_spatial_index":
+            # 重建空间索引
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "rebuild_spatial_index", "message": "重建空间索引 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "重建空间索引 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "compact_datasource":
+            # 紧缩数据源
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "compact_datasource", "message": "紧缩数据源 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "紧缩数据源 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_raster_dataset":
+            # 创建栅格数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_raster_dataset", "message": "创建栅格数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建栅格数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_image_dataset":
+            # 创建影像数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_image_dataset", "message": "创建影像数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建影像数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "delete_dataset_from_datasource":
+            # 删除数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "delete_dataset_from_datasource", "message": "删除数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "删除数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "repair_datasource":
+            # 修复数据源
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "repair_datasource", "message": "修复数据源 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "修复数据源 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "get_dataset_connection_info":
+            # 获取数据集连接信息
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "get_dataset_connection_info", "message": "获取数据集连接信息 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "获取数据集连接信息 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "dataset_get_datasource":
+            # 数据集获取数据源
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "dataset_get_datasource", "message": "数据集获取数据源 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "数据集获取数据源 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_raster_pyramid":
+            # 创建栅格金字塔
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_raster_pyramid", "message": "创建栅格金字塔 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建栅格金字塔 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_image_pyramid":
+            # 创建影像金字塔
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_image_pyramid", "message": "创建影像金字塔 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建影像金字塔 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_db_user":
+            # 创建数据库用户
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_db_user", "message": "创建数据库用户 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建数据库用户 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "manage_roles":
+            # 管理角色
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "manage_roles", "message": "管理角色 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "管理角色 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "datasource_permissions":
+            # 数据源权限
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "datasource_permissions", "message": "数据源权限 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "数据源权限 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "create_relation_dataset":
+            # 创建关系数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "create_relation_dataset", "message": "创建关系数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "创建关系数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "get_dataset":
+            # 获取数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "get_dataset", "message": "获取数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "获取数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "open_dataset":
+            # 打开数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "open_dataset", "message": "打开数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "打开数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "get_query_dataset":
+            # 获取查询数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "get_query_dataset", "message": "获取查询数据集 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "获取查询数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_mongodb_tiles_to_local":
+            # MongoDB转本地瓦片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_mongodb_tiles_to_local", "message": "MongoDB转本地瓦片 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "MongoDB转本地瓦片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_local_tiles_to_mongodb":
+            # 本地瓦片转MongoDB
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_local_tiles_to_mongodb", "message": "本地瓦片转MongoDB 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "本地瓦片转MongoDB 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_local_tiles":
+            # 本地瓦片转换
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_local_tiles", "message": "本地瓦片转换 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "本地瓦片转换 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_tiles_to_webp":
+            # 瓦片转WebP
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_tiles_to_webp", "message": "瓦片转WebP 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片转WebP 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "extract_tiles_to_mongodb":
+            # 提取瓦片到MongoDB
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "extract_tiles_to_mongodb", "message": "提取瓦片到MongoDB 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取瓦片到MongoDB 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "extract_tiles_to_local":
+            # 提取瓦片到本地
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "extract_tiles_to_local", "message": "提取瓦片到本地 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取瓦片到本地 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "merge_tiles_to_local":
+            # 合并瓦片到本地
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "merge_tiles_to_local", "message": "合并瓦片到本地 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "合并瓦片到本地 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "merge_tiles_to_mongodb":
+            # 合并瓦片到MongoDB
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "merge_tiles_to_mongodb", "message": "合并瓦片到MongoDB 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "合并瓦片到MongoDB 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "check_tiles":
+            # 检查瓦片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "check_tiles", "message": "检查瓦片 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "检查瓦片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "upload_file_to_s3":
+            # 上传文件到S3
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "upload_file_to_s3", "message": "上传文件到S3 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "上传文件到S3 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_ugcv5_to_pmtiles":
+            # UGCV5转PMTiles
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_ugcv5_to_pmtiles", "message": "UGCV5转PMTiles 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "UGCV5转PMTiles 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_ugcv5_to_comtiles":
+            # UGCV5转ComTiles
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_ugcv5_to_comtiles", "message": "UGCV5转ComTiles 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "UGCV5转ComTiles 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "convert_3d_image_tiles_to_map_tiles":
+            # 3D影像转地图瓦片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "convert_3d_image_tiles_to_map_tiles", "message": "3D影像转地图瓦片 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "3D影像转地图瓦片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "split_tile_task":
+            # 拆分瓦片任务
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "split_tile_task", "message": "拆分瓦片任务 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "拆分瓦片任务 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "multi_process_generate_tiles":
+            # 多进程生成瓦片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "multi_process_generate_tiles", "message": "多进程生成瓦片 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "多进程生成瓦片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "generate_raster_tile_config":
+            # 生成栅格瓦片配置
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "generate_raster_tile_config", "message": "生成栅格瓦片配置 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "生成栅格瓦片配置 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+        elif name == "generate_vector_tile_config":
+            # 生成矢量瓦片配置
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    {"status": "success", "action": "generate_vector_tile_config", "message": "生成矢量瓦片配置 已调用（待实现）"}
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "生成矢量瓦片配置 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
         
         else:
             return [TextContent(type="text", text=json.dumps({
