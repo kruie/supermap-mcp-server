@@ -1,10 +1,10 @@
 # SuperMap iDesktopX MCP Server
 
-基于 SuperMap iObjectsPy 的 MCP 服务器，提供 **179 个 GIS 自动化工具**，覆盖数据管理、空间分析、栅格处理、水文分析、倾斜摄影、三维建模、iServer REST API 等完整 GIS 工作流。
+基于 SuperMap iObjectsPy 的 MCP 服务器，提供 **253 个 GIS 自动化工具**，覆盖数据管理、空间分析、栅格处理、水文分析、倾斜摄影、三维建模、矢量数据处理、三维数据导入、数据管理、地图瓦片、iServer REST API 等完整 GIS 工作流。
 
 ## 版本
 
-**v7.0** - 扩展规则建模 / 3D 城市建模 / CIM 工具（新增 11 个三维建模工具）
+**v7.5-fix2** - 恢复全部扩展工具（矢量处理+三维导入+数据扩展+数据管理+地图瓦片），修复连接问题
 
 ## 功能分类
 
@@ -15,21 +15,23 @@
 | 工作空间 | 3 | `open_workspace`, `save_workspace`, `get_workspace_info` |
 | 坐标系 | 3 | `get_coordinate_system`, `reproject_dataset`, `convert_coordinates` |
 | 数据集管理 | 24 | `list/get/query/create/delete/copy/append dataset`, `add/calculate/rename/delete field`, `update/delete record`, 排序、提取 ID 等 |
-| 数据导入 | 15 | Shapefile、GDB、CSV、TIFF、DWG、KML、GeoJSON、OSM、Excel、GPX、E00、MIF、SDX、JSON、`batch_import` |
+| 数据导入 | 15+17=**32** | Shapefile、GDB、CSV、TIFF、DWG、KML、GeoJSON、OSM、Excel、GPX、E00、MIF、SDX、JSON、`batch_import` + **DEM/BIL/RAW/BSQ/BIP/GRIB2/VCT/LIDAR/电信/ArcInfo Grid 等** |
 | 数据导出 | 11 | Shapefile、GeoJSON、TIFF、KML、CSV、Excel、GDB、DWG、SVG、PNG/JPG、`batch_export` |
 | 几何与格式转换 | 8 | 点↔线↔面互转、矢量↔栅格互转、属性表转点 |
 | 矢量空间分析 | 24 | 缓冲区、叠加、裁剪、融合、空间连接、邻近分析、凸包、消除碎面、点聚合、数据透视表等 |
+| 矢量数据处理（新增） | **23** | **几何属性计算、线拓扑处理、点抽稀、中心线提取、去冗去重、矢量重采样、保护性分解、编码工具等** |
 | 栅格分析 | 18 | 坡度/坡向/山体阴影、重分类、NDVI/NDWI、波段运算、栅格计算器、镶嵌、等值线等 |
 | 插值与密度分析 | 3 | `idw_interpolate`, `kriging_interpolate`, `kernel_density` |
 | 水文分析 | 15 | 填洼、流向、汇水量、流域分割、河流提取、河流分级、刻河等完整水文工作流 |
 | 地图制图 | 7 | `create/list/get_map`, `add_layer_to_map`, `export_map_image`, `generate_map_tiles`, `create_strip_map` |
 | 工具函数 | 2 | `compute_distance`, `compute_geodesic_area` |
 | 倾斜摄影与三维数据处理 | 17 | 倾斜摄影入库 (S3M)、单体化、裁剪、纹理重映射、3D Tiles ↔ S3M 转换、水印等 |
+| 三维数据导入（新增） | **11** | **IFC、3DXML、GIM、RVM、CityGML、RVT、DGN、点加模型、GIM 筛选等** |
 | 规则建模 (3D 城市建模 / CIM) | 10 | 线性/旋转拉伸、放样、坡屋顶、构建房、道路工程设计、屋顶分类、建筑物边界规范化、一键带屋顶建筑等 |
 | iServer REST API | 10 | 服务管理 (start/stop/restart)、查询、发布、清除缓存、Token 获取 |
 | 脚本执行与流水线 | 2 | `run_python_script`, `execute_pipeline` |
 
-**合计：179 个工具**
+**合计：264 个工具**
 
 ## 工具详细列表
 
