@@ -1,7 +1,7 @@
 {
   "name": "supermap-mcp-server",
-  "version": "4.2.0",
-  "description": "SuperMap iObjectsPy MCP Server - 69 GIS automation tools (iDesktopX + iServer REST API)",
+  "version": "8.3.0",
+  "description": "SuperMap iObjectsPy MCP Server - 362 GIS automation tools (iDesktopX + iServer REST API)",
   "author": "kruie",
   "license": "MIT",
   "type": "mcp-server",
@@ -56,71 +56,217 @@
     }
   },
   "tools": {
-    "count": 69,
+    "count": 362,
     "categories": [
       {
         "name": "Initialization & Environment",
+        "count": 3,
         "tools": ["initialize_supermap", "get_environment_info", "check_mcp_health"]
       },
       {
         "name": "Datasource Management",
-        "tools": ["open_udbx_datasource", "create_udbx_datasource", "create_memory_datasource"]
+        "count": 5,
+        "tools": ["open_udbx_datasource", "create_udbx_datasource", "create_memory_datasource", "close_datasource", "compact_datasource"]
       },
       {
-        "name": "Dataset Management",
-        "tools": ["list_datasets", "get_dataset_info", "query_dataset", "delete_dataset", "create_dataset", "copy_dataset", "append_to_dataset", "add_field", "calculate_field"]
-      },
-      {
-        "name": "Data Import",
-        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm", "batch_import"]
-      },
-      {
-        "name": "Data Export",
-        "tools": ["export_shapefile", "export_geojson", "export_tiff", "batch_export"]
-      },
-      {
-        "name": "Workspace & Datasource",
+        "name": "Workspace & Coordinate System",
+        "count": 5,
         "tools": ["open_workspace", "save_workspace", "get_workspace_info", "get_coordinate_system", "reproject_dataset"]
       },
       {
-        "name": "Dataset Operations",
-        "tools": ["dataset_point_to_line", "dataset_line_to_region", "dataset_region_to_line", "dissolve"]
+        "name": "Dataset Management",
+        "count": 17,
+        "tools": ["list_datasets", "get_dataset_info", "query_dataset", "delete_dataset", "create_dataset", "copy_dataset", "append_to_dataset", "add_field", "calculate_field", "rename_dataset", "get_field_info", "delete_field", "update_record", "delete_record", "get_record_count", "get_dataset_bounds", "sort_dataset"]
+      },
+      {
+        "name": "Data Import",
+        "count": 28,
+        "tools": ["import_shapefile", "import_gdb", "import_csv", "import_tiff", "import_dwg", "import_kml", "import_geojson", "import_osm", "import_excel", "import_simple_json", "import_gpx", "import_e00", "import_mif", "import_sdx", "import_ifc", "import_dxf", "import_3dxml", "import_gim", "import_rvm", "import_citygml", "import_rvt", "import_gpkg", "import_vct", "import_3dm", "batch_import", "batch_import_3d", "import_point_with_model", "gim_file_filter"]
+      },
+      {
+        "name": "Raster/Grid Import",
+        "count": 10,
+        "tools": ["import_dem_us", "import_dem_cn", "import_bil", "import_raw", "import_bsq", "import_bip", "import_egc", "import_vrt", "import_grib2", "import_arcinfo_binary_grid"]
+      },
+      {
+        "name": "Specialized Import",
+        "count": 4,
+        "tools": ["import_lidar_txt", "import_telecom_vector_line", "import_telecom_building_region", "import_telecom_vector_text"]
+      },
+      {
+        "name": "Data Export",
+        "count": 12,
+        "tools": ["export_shapefile", "export_geojson", "export_tiff", "export_kml", "export_csv", "export_excel", "export_gdb", "export_dwg", "export_svg", "export_png_jpg", "batch_export", "save_to_kml"]
+      },
+      {
+        "name": "Data Processing (Extended)",
+        "count": 12,
+        "tools": ["eliminate", "spatial_join", "merge_datasets", "rename_field", "summary_statistics", "delete_by_filter", "count_features_in_region", "calculate_envelope", "building_regularization", "region_aggregate", "data_pivot_table", "point_cluster_to_region"]
+      },
+      {
+        "name": "Vector Data Processing",
+        "count": 9,
+        "tools": ["convert_coordinates", "break_vertices", "recalculate_bounds", "merge_slivers_by_filter", "create_strip_map", "create_vector_pyramid", "delete_vector_pyramid", "extract_object_id", "vector_resample"]
+      },
+      {
+        "name": "Dataset Type Conversion",
+        "count": 9,
+        "tools": ["dataset_point_to_line", "dataset_line_to_region", "dataset_region_to_line", "dissolve", "dataset_region_to_point", "dataset_line_to_point", "dataset_vector_to_raster", "dataset_raster_to_vector", "dataset_tabular_to_point"]
       },
       {
         "name": "Spatial Analysis",
+        "count": 4,
         "tools": ["create_buffer", "create_multi_buffer", "overlay", "clip_data"]
       },
       {
         "name": "Raster Analysis",
-        "tools": ["calculate_slope", "calculate_aspect", "calculate_hillshade"]
+        "count": 15,
+        "tools": ["calculate_slope", "calculate_aspect", "calculate_hillshade", "raster_resample", "raster_composite", "raster_split", "raster_weighted_sum", "calculate_ndvi", "calculate_ndwi", "raster_band_math", "raster_clip", "raster_aggregate", "raster_contour", "raster_mosaic", "raster_calculator"]
       },
       {
-        "name": "Interpolation",
-        "tools": ["idw_interpolate", "kriging_interpolate"]
+        "name": "Advanced Raster",
+        "count": 2,
+        "tools": ["raster_update", "raster_fill_nodata"]
       },
       {
-        "name": "Density Analysis",
-        "tools": ["kernel_density"]
+        "name": "Interpolation & Density",
+        "count": 3,
+        "tools": ["idw_interpolate", "kriging_interpolate", "kernel_density"]
       },
       {
-        "name": "Hydrology Analysis",
-        "tools": ["fill_sink", "watershed"]
+        "name": "Hydrology Analysis (Extended)",
+        "count": 15,
+        "tools": ["fill_sink", "watershed", "calculate_flow_direction", "calculate_flow_length", "calculate_accumulation", "calculate_pour_points", "snap_pour_points", "watershed_split", "calculate_watershed_basin", "extract_stream_network", "stream_order", "stream_to_vector", "link_streams", "burn_streams_to_dem", "extract_longest_flow_path"]
       },
       {
-        "name": "Other Analysis",
-        "tools": ["create_thiessen_polygons", "aggregate_points", "reclassify"]
+        "name": "Other Vector Analysis",
+        "count": 5,
+        "tools": ["create_thiessen_polygons", "aggregate_points", "reclassify", "spatial_query", "proximity_analysis"]
+      },
+      {
+        "name": "Geometry Analysis",
+        "count": 3,
+        "tools": ["convex_hull", "minimum_bounding_geometry", "smooth_line"]
       },
       {
         "name": "Map Cartography",
+        "count": 6,
         "tools": ["create_map", "list_maps", "get_map_info", "add_layer_to_map", "export_map_image", "generate_map_tiles"]
       },
       {
         "name": "Utility Functions",
+        "count": 2,
         "tools": ["compute_distance", "compute_geodesic_area"]
       },
       {
+        "name": "Oblique Photography",
+        "count": 23,
+        "tools": ["oblique_to_s3m", "oblique_to_s3m_single", "oblique_generate_normal", "oblique_modify_center", "oblique_clip", "generate_oblique_config", "obj_to_osgb", "oblique_texture_remap", "tdtiles_to_s3m", "s3m_to_3dtiles", "generate_oblique_index", "update_oblique_data", "update_oblique_mongodb", "oblique_continue_generate", "oblique_preprocess", "extract_oblique_root", "set_oblique_watermark", "oblique_data_clip", "oblique_data_hollow", "oblique_data_tessellate", "extract_oblique_data", "batch_extract_oblique_data", "extract_oblique_building"]
+      },
+      {
+        "name": "3D City Modeling (CIM)",
+        "count": 18,
+        "tools": ["linear_extrude", "rotate_extrude", "extrude_closed_body", "loft", "build_slope_roof", "build_house", "road_engineering_design", "vector_extrude", "roof_classification", "building_boundary_regularization", "build_building_with_roof", "build_geology", "geology_section", "geology_borehole", "buffer_3d", "shadow_body", "polygon_merge", "sunlight_analysis"]
+      },
+      {
         "name": "iServer REST API",
+        "count": 10,
         "tools": ["iserver_get_service_list", "iserver_get_service_status", "iserver_start_service", "iserver_stop_service", "iserver_restart_service", "iserver_get_map_info", "iserver_query_data", "iserver_clear_cache", "iserver_publish_map_service", "iserver_get_token"]
+      },
+      {
+        "name": "Script & Pipeline",
+        "count": 2,
+        "tools": ["run_python_script", "execute_pipeline"]
+      },
+      {
+        "name": "Vector Processing (Extended 2)",
+        "count": 14,
+        "tools": ["calculate_geometry_attributes", "split_dataset", "integrate_datasets", "map_sheet_edge_matching", "protective_decomposition", "line_topology_process", "point_thinning", "dual_line_to_centerline", "region_to_centerline", "region_main_centerline", "remove_redundant_nodes", "remove_duplicates", "update_field_to_date", "calculate_concave_polygon"]
+      },
+      {
+        "name": "Spatial Encoding",
+        "count": 6,
+        "tools": ["geosot_2d_encoding", "geosot_3d_encoding", "geographic_entity_2d_encoding", "geographic_entity_3d_encoding", "beidou_2d_grid_encoding", "beidou_3d_grid_encoding"]
+      },
+      {
+        "name": "Advanced Vector (Extended)",
+        "count": 3,
+        "tools": ["generate_near_points", "copy_field_to_vector_pyramid", "vector_resample"]
+      },
+      {
+        "name": "3D Model Import",
+        "count": 9,
+        "tools": ["import_obj", "import_3ds", "import_fbx", "import_gltf", "import_dae", "import_stl", "import_ply", "import_xyz", "import_las"]
+      },
+      {
+        "name": "3D Model Export",
+        "count": 8,
+        "tools": ["export_obj", "export_gltf", "export_3ds", "export_stl", "export_ply", "export_dae", "export_fbx", "export_model"]
+      },
+      {
+        "name": "Model Processing",
+        "count": 15,
+        "tools": ["model_simplify", "model_merge", "model_texture_process", "model_transform", "model_boolean_operation", "model_instancing", "texture_boundary_optimize", "single_model_convert", "batch_model_convert", "batch_convert_model", "model_tessellate", "model_hollow", "mesh_simplify", "model_texture_remap", "texture_downsample"]
+      },
+      {
+        "name": "Model Repair & Optimization",
+        "count": 11,
+        "tools": ["remove_duplicate_points", "remove_duplicate_faces", "batch_remove_duplicate", "remove_collinear_points", "manifold_correction", "compute_normals", "remove_normals", "topology_correction", "sub_object_optimize", "model_voxelize", "extract_isosurface"]
+      },
+      {
+        "name": "Model Geometry Operations",
+        "count": 7,
+        "tools": ["project_to_face", "project_extrude", "extract_boundary", "translate_object", "model_split", "model_clip", "append_model_attribute"]
+      },
+      {
+        "name": "Point Cloud",
+        "count": 3,
+        "tools": ["point_cloud_filter", "point_cloud_classify", "point_cloud_to_model"]
+      },
+      {
+        "name": "Raster to Model",
+        "count": 5,
+        "tools": ["extract_data", "generate_dsm", "raster_to_model", "raster_tile_to_model", "export_model_points"]
+      },
+      {
+        "name": "Elevation & Model Data",
+        "count": 3,
+        "tools": ["extract_elevation", "save_as_model_dataset", "batch_export_model"]
+      },
+      {
+        "name": "Datasource Advanced Management",
+        "count": 11,
+        "tools": ["rebuild_spatial_index", "create_raster_dataset", "create_image_dataset", "delete_dataset_from_datasource", "repair_datasource", "get_dataset_connection_info", "dataset_get_datasource", "create_raster_pyramid", "create_image_pyramid", "create_db_user", "manage_roles"]
+      },
+      {
+        "name": "Datasource Permissions & Relations",
+        "count": 3,
+        "tools": ["datasource_permissions", "create_relation_dataset", "get_dataset"]
+      },
+      {
+        "name": "Dataset Advanced",
+        "count": 2,
+        "tools": ["open_dataset", "get_query_dataset"]
+      },
+      {
+        "name": "Map Tiles",
+        "count": 18,
+        "tools": ["convert_mongodb_tiles_to_local", "convert_local_tiles_to_mongodb", "convert_local_tiles", "convert_tiles_to_webp", "extract_tiles_to_mongodb", "extract_tiles_to_local", "merge_tiles_to_local", "merge_tiles_to_mongodb", "check_tiles", "upload_file_to_s3", "convert_ugcv5_to_pmtiles", "convert_ugcv5_to_comtiles", "convert_3d_image_tiles_to_map_tiles", "split_tile_task", "multi_process_generate_tiles", "generate_raster_tile_config", "generate_vector_tile_config", "tile_statistics"]
+      },
+      {
+        "name": "Tile Management (Extended)",
+        "count": 11,
+        "tools": ["terrain_tile_storage", "image_tile_storage", "rebuild_pyramid", "model_compress", "s3m_upgrade", "tile_encrypt", "reslice_tile", "tile_storage_manage", "tile_register", "merge_tile_root", "split_tile_root"]
+      },
+      {
+        "name": "Tile Operations",
+        "count": 4,
+        "tools": ["clip_tile", "update_tile", "extract_tile_data", "tile_to_model"]
+      },
+      {
+        "name": "ModelBuilder Workflow (v8.3 NEW)",
+        "count": 7,
+        "tools": ["iterate_objects", "iterate_datasets", "iterate_files", "iterate_directories", "condition_equal", "format_date", "replace_text"]
       }
     ]
   },

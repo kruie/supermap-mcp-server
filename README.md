@@ -1,37 +1,57 @@
 # SuperMap iDesktopX MCP Server
 
-基于 SuperMap iObjectsPy 的 MCP 服务器，提供 **253 个 GIS 自动化工具**，覆盖数据管理、空间分析、栅格处理、水文分析、倾斜摄影、三维建模、矢量数据处理、三维数据导入、数据管理、地图瓦片、iServer REST API 等完整 GIS 工作流。
+基于 SuperMap iObjectsPy 的 MCP 服务器，提供 **362 个 GIS 自动化工具**，覆盖数据管理、空间分析、栅格处理、水文分析、倾斜摄影、三维建模、矢量数据处理、三维数据导入、数据管理、地图瓦片、建模工作流（ModelBuilder）、iServer REST API 等完整 GIS 工作流。
 
 ## 版本
 
-**v7.5-fix2** - 恢复全部扩展工具（矢量处理+三维导入+数据扩展+数据管理+地图瓦片），修复连接问题
+**v8.3** - 362 个工具（新增 ModelBuilder 建模工具 7 个：迭代对象/迭代数据集/迭代文件/迭代目录/条件判断/日期格式化/文本替换）
 
 ## 功能分类
 
 | 类别 | 工具数量 | 代表工具 |
 |------|:--------:|---------|
 | 初始化与环境 | 3 | `initialize_supermap`, `get_environment_info`, `check_mcp_health` |
-| 数据源管理 | 4 | `open_udbx_datasource`, `create_udbx_datasource`, `create_memory_datasource`, `close_datasource` |
-| 工作空间 | 3 | `open_workspace`, `save_workspace`, `get_workspace_info` |
-| 坐标系 | 3 | `get_coordinate_system`, `reproject_dataset`, `convert_coordinates` |
-| 数据集管理 | 24 | `list/get/query/create/delete/copy/append dataset`, `add/calculate/rename/delete field`, `update/delete record`, 排序、提取 ID 等 |
-| 数据导入 | 15+17=**32** | Shapefile、GDB、CSV、TIFF、DWG、KML、GeoJSON、OSM、Excel、GPX、E00、MIF、SDX、JSON、`batch_import` + **DEM/BIL/RAW/BSQ/BIP/GRIB2/VCT/LIDAR/电信/ArcInfo Grid 等** |
-| 数据导出 | 11 | Shapefile、GeoJSON、TIFF、KML、CSV、Excel、GDB、DWG、SVG、PNG/JPG、`batch_export` |
-| 几何与格式转换 | 8 | 点↔线↔面互转、矢量↔栅格互转、属性表转点 |
-| 矢量空间分析 | 24 | 缓冲区、叠加、裁剪、融合、空间连接、邻近分析、凸包、消除碎面、点聚合、数据透视表等 |
-| 矢量数据处理（新增） | **23** | **几何属性计算、线拓扑处理、点抽稀、中心线提取、去冗去重、矢量重采样、保护性分解、编码工具等** |
-| 栅格分析 | 18 | 坡度/坡向/山体阴影、重分类、NDVI/NDWI、波段运算、栅格计算器、镶嵌、等值线等 |
-| 插值与密度分析 | 3 | `idw_interpolate`, `kriging_interpolate`, `kernel_density` |
-| 水文分析 | 15 | 填洼、流向、汇水量、流域分割、河流提取、河流分级、刻河等完整水文工作流 |
-| 地图制图 | 7 | `create/list/get_map`, `add_layer_to_map`, `export_map_image`, `generate_map_tiles`, `create_strip_map` |
+| 数据源管理 | 5 | `open_udbx_datasource`, `create_udbx_datasource`, `create_memory_datasource`, `close_datasource`, `compact_datasource` |
+| 工作空间与坐标系 | 5 | `open_workspace`, `save_workspace`, `get_workspace_info`, `get_coordinate_system`, `reproject_dataset` |
+| 数据集管理 | 17 | `list/get/query/create/delete/copy/append dataset`, `add/calculate/rename/delete field`, `update/delete record`, 排序等 |
+| 数据导入 | 28 | Shapefile、GDB、CSV、TIFF、DWG、KML、GeoJSON、OSM、Excel、GPX、E00、MIF、SDX、IFC、DXF、3DXML、GIM、RVM、CityGML、RVT、GPKG、VCT、3DM 等 |
+| 栅格/网格导入 | 10 | DEM(US/CN)、BIL、RAW、BSQ、BIP、EGC、VRT、GRIB2、ArcInfo Binary Grid |
+| 专业数据导入 | 4 | LIDAR、电信矢量线、电信建筑物面、电信矢量文本 |
+| 数据导出 | 12 | Shapefile、GeoJSON、TIFF、KML、CSV、Excel、GDB、DWG、SVG、PNG/JPG、`batch_export`、`save_to_kml` |
+| 数据处理（扩展） | 12 | 消除碎面、空间连接、合并数据集、重命名字段、汇总统计、按过滤器删除、建筑物规范化、区域聚合、数据透视表、点聚类成面等 |
+| 矢量处理 | 9 | 坐标转换、断点、重算范围、合并碎面、创建条带图、矢量金字塔、提取对象ID、矢量重采样等 |
+| 数据集类型转换 | 9 | 点↔线↔面互转、矢量↔栅格互转、属性表转点、融合 |
+| 空间分析 | 4 | 缓冲区、多环缓冲区、叠加分析、裁剪 |
+| 栅格分析 | 15 | 坡度/坡向/山体阴影、重分类、NDVI/NDWI、波段运算、栅格计算器、重采样、镶嵌、等值线、裁剪等 |
+| 高级栅格 | 2 | 栅格更新、填充 NoData |
+| 插值与密度 | 3 | IDW、克里金插值、核密度分析 |
+| 水文分析（扩展） | 15 | 填洼、流向、流量、汇水点、流域分割、河流提取/分级、最長流路徑等完整水文工作流 |
+| 矢量分析 | 5 | 泰森多边形、聚合点、重分类、空间查询、邻近分析 |
+| 几何分析 | 3 | 凸包、最小边界几何、平滑线 |
+| 地图制图 | 6 | `create/list/get_map`, `add_layer_to_map`, `export_map_image`, `generate_map_tiles` |
 | 工具函数 | 2 | `compute_distance`, `compute_geodesic_area` |
-| 倾斜摄影与三维数据处理 | 17 | 倾斜摄影入库 (S3M)、单体化、裁剪、纹理重映射、3D Tiles ↔ S3M 转换、水印等 |
-| 三维数据导入（新增） | **11** | **IFC、3DXML、GIM、RVM、CityGML、RVT、DGN、点加模型、GIM 筛选等** |
-| 规则建模 (3D 城市建模 / CIM) | 10 | 线性/旋转拉伸、放样、坡屋顶、构建房、道路工程设计、屋顶分类、建筑物边界规范化、一键带屋顶建筑等 |
+| 倾斜摄影 | 23 | S3M 入库/单体化、裁剪/镂空、纹理重映射、3D Tiles ↔ S3M、配置文件生成、数据更新(MongoDB)、水印等 |
+| 3D 城市建模 (CIM) | 18 | 线性/旋转拉伸、放样、坡屋顶/带屋顶建筑、道路工程、屋顶分类、地质体/剖面/钻孔、三维缓冲/阴影/合并、日照分析 |
+| 矢量处理（扩展2） | 14 | 几何属性计算、拆分数据集、接边、保护性分解、线拓扑、点抽稀、中心线、去冗去重、日期字段更新、凹多边形等 |
+| 空间编码 | 6 | GeoSOT 2D/3D、地理实体 2D/3D、北斗 2D/3D 网格编码 |
+| 三维模型导入 | 9 | OBJ、3DS、FBX、glTF、DAE、STL、PLY、XYZ、LAS |
+| 三维模型导出 | 8 | OBJ、glTF、3DS、STL、PLY、DAE、FBX、export_model |
+| 模型处理 | 15 | 简化/合并/纹理处理/变换/布尔运算/实例化/纹理边界优化/镶嵌/镂空/网格简化/纹理重映射/纹理降采样等 |
+| 模型修复与优化 | 11 | 去重点/重面/共线/法线、流形校正、拓扑修正、子对象优化、体素化、等值面提取 |
+| 模型几何操作 | 7 | 投影到面/挤出、提取边界、平移、拆分、裁剪、附加属性 |
+| 点云 | 3 | 过滤、分类、点云转模型 |
+| 栅格转模型 | 5 | 提取数据、生成DSM、栅格/瓦片转模型、导出模型点 |
+| 高程与模型数据 | 3 | 提取高程、保存为模型数据集、批量导出模型 |
+| 数据源高级管理 | 11 | 重建空间索引、创建栅格/影像数据集、删除、修复、获取连接信息、创建用户/角色、权限等 |
+| 数据集高级 | 2 | `open_dataset`, `get_query_dataset` |
+| 地图瓦片 | 18 | MongoDB/本地转换、WebP 转换、提取/合并/检查瓦片、S3 上传、PMTiles/ComTiles 转换、多进程生成等 |
+| 瓦片管理（扩展） | 11 | 地形/影像瓦片存储、重建金字塔、模型压缩、S3M 升级、加密、重切片、注册、合并/拆分根节点 |
+| 瓦片操作 | 4 | 裁剪/更新瓦片、提取瓦片数据、瓦片转模型 |
 | iServer REST API | 10 | 服务管理 (start/stop/restart)、查询、发布、清除缓存、Token 获取 |
 | 脚本执行与流水线 | 2 | `run_python_script`, `execute_pipeline` |
+| **建模工具 (ModelBuilder) 🆕** | **7** | `iterate_objects`, `iterate_datasets`, `iterate_files`, `iterate_directories`, `condition_equal`, `format_date`, `replace_text` |
 
-**合计：264 个工具**
+**合计：362 个工具**
 
 ## 工具详细列表
 
@@ -358,6 +378,21 @@
 
 </details>
 
+<details>
+<summary>建模工具 ModelBuilder (v8.3 🆕) (7)</summary>
+
+| 工具名 | 说明 |
+|--------|------|
+| `iterate_objects` | 迭代数据集中的对象（记录），批量遍历矢量数据集 |
+| `iterate_datasets` | 迭代数据源中的所有数据集，获取名称/类型/记录数 |
+| `iterate_files` | 迭代目录中的文件，支持扩展名过滤和递归 |
+| `iterate_directories` | 迭代目录中的子目录 |
+| `condition_equal` | 条件判断（等于），用于 ModelBuilder 流程控制 |
+| `format_date` | 日期格式化，支持自定义格式 |
+| `replace_text` | 文本替换，支持正则表达式 |
+
+</details>
+
 ## 安装
 
 将此服务器添加到 WorkBuddy MCP 配置 (`~/.workbuddy/mcp.json`)：
@@ -389,3 +424,14 @@
 ## 许可证
 
 MIT
+
+## 版本历史
+
+| 版本 | 工具数 | 说明 |
+|------|:------:|------|
+| **v8.3** | **362** | 新增 ModelBuilder 建模工具 7 个：迭代对象/迭代数据集/迭代文件/迭代目录/条件判断/日期格式化/文本替换 |
+| v8.2 | 355 | 新增地质体构建 3 个 + 三维分析 4 个 + 瓦片工具 17 个；扩展规则建模/3D城市建模/CIM 工具 |
+| v8.1 | 344 | 修复 MCP Server 连接问题 + 恢复 253 个扩展工具 |
+| v7.x | 179~264 | 工具扩展期：数据导入导出、水文分析、倾斜摄影、三维建模、瓦片管理等 |
+| v2.0 | 53 | 基础版本：数据源/数据集管理、空间分析、地图制图、iServer API |
+| v1.0 | 18 | 初始版本：核心 GIS 操作 |

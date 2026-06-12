@@ -5,8 +5,8 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 344/344 (已恢复全部扩展工具)
-版本: v8.2 (新增地质体构建3个+三维分析4个+瓦片工具17个=23个工具) (扩展规则建模/3D城市建模/CIM工具；新增线性拉伸/旋转拉伸/拉伸闭合体/放样/构建坡屋顶/构建房/道路工程设计/矢量拉伸/屋顶分类/建筑物边界规范化/构建带屋顶建筑物)
+工具数量: 362/362 (已恢复全部扩展工具)
+版本: v8.3 (新增建模工具7个：迭代对象/迭代数据集/迭代文件/迭代目录/条件判断/日期格式化/文本替换)
 """
 
 import sys
@@ -5578,7 +5578,102 @@ async def list_tools():
             "required": ["tile_path", "datasource_path", "dataset_name"],
         }
         ),
-    ]
+        # ---- 建模工具（ModelBuilder 工作流） ----
+        Tool(
+            name="iterate_objects",
+            description="迭代数据集中的对象（记录）。适用于: 批量遍历矢量数据集的每条记录，获取属性值或几何信息。返回: {status, dataset_name, total_count, objects[{id, field_values, geometry_type}]}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "数据源路径(.udbx)"},
+                    "dataset_name": {"type": "string", "description": "数据集名称"},
+                    "field_names": {"type": "array", "items": {"type": "string"}, "description": "要提取的字段名列表（可选，默认全部）"},
+                    "max_count": {"type": "integer", "description": "最大迭代数量（可选，默认1000）"},
+                    "where_clause": {"type": "string", "description": "过滤条件 SQL（可选，如 \"SmID > 10\")"}
+                },
+                "required": ["datasource_path", "dataset_name"]
+            }
+        ),
+        Tool(
+            name="iterate_datasets",
+            description="迭代数据源中的所有数据集。适用于: 批量遍历数据源中的数据集列表，获取名称、类型、记录数等信息。返回: {status, datasource_path, datasets[{name, type, record_count, fields[]}]}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": {"type": "string", "description": "数据源路径(.udbx)"},
+                    "dataset_type_filter": {"type": "string", "description": "数据集类型过滤（可选: point/line/region/grid/image，默认全部）"}
+                },
+                "required": ["datasource_path"]
+            }
+        ),
+        Tool(
+            name="iterate_files",
+            description="迭代目录中的文件。适用于: 批量遍历文件夹中的文件，按扩展名过滤。返回: {status, directory, files[{name, size, modified_time}]}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "目标目录路径"},
+                    "extension_filter": {"type": "string", "description": "扩展名过滤（可选，如 \".shp,.udbx\" 或 \"shp\"）"},
+                    "recursive": {"type": "boolean", "description": "是否递归子目录（默认: false）"},
+                    "max_count": {"type": "integer", "description": "最大返回数量（默认: 1000）"}
+                },
+                "required": ["directory"]
+            }
+        ),
+        Tool(
+            name="iterate_directories",
+            description="迭代目录中的子目录。适用于: 批量遍历文件夹中的子目录结构。返回: {status, directory, subdirectories[{name, depth, file_count}]}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "目标目录路径"},
+                    "max_depth": {"type": "integer", "description": "最大递归深度（默认: 3）"},
+                    "max_count": {"type": "integer", "description": "最大返回数量（默认: 500）"}
+                },
+                "required": ["directory"]
+            }
+        ),
+        Tool(
+            name="condition_equal",
+            description="条件工具：判断两个值是否相同。适用于: ModelBuilder 工作流中的条件分支判断。返回: {status, result, value_a, value_b, type}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "value_a": {"type": ["string", "number", "boolean"], "description": "值 A"},
+                    "value_b": {"type": ["string", "number", "boolean"], "description": "值 B"},
+                    "compare_type": {"type": "string", "enum": ["exact", "numeric", "case_insensitive", "contains"], "description": "比较类型（默认: exact）"}
+                },
+                "required": ["value_a", "value_b"]
+            }
+        ),
+        Tool(
+            name="format_date",
+            description="日期工具：格式化日期字符串。适用于: 将日期/时间戳转换为指定格式的字符串。返回: {status, input, output, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "date_input": {"type": "string", "description": "输入日期（ISO格式、时间戳或常见日期字符串）"},
+                    "output_format": {"type": "string", "description": "输出格式（默认: \"%Y-%m-%d %H:%M:%S\"，支持 strftime 格式）"},
+                    "input_format": {"type": "string", "description": "输入格式（可选，如输入非标准格式时指定）"}
+                },
+                "required": ["date_input"]
+            }
+        ),
+        Tool(
+            name="replace_text",
+            description="文本工具：按内容替换文本。适用于: 批量替换字符串中的指定内容，支持正则表达式。返回: {status, original, replaced, replace_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "原始文本"},
+                    "old_value": {"type": "string", "description": "要替换的内容"},
+                    "new_value": {"type": "string", "description": "替换后的内容"},
+                    "use_regex": {"type": "boolean", "description": "是否使用正则表达式（默认: false）"},
+                    "case_sensitive": {"type": "boolean", "description": "是否区分大小写（默认: true）"}
+                },
+                "required": ["text", "old_value", "new_value"]
+            }
+        ),
 
 
 # =============================================================================
@@ -17059,9 +17154,354 @@ async def _handle_iserver_tool(name: str, arguments: dict):
                     "traceback": traceback.format_exc()
                 }, indent=2))]
 
+        # ---- 建模工具（ModelBuilder 工作流） ----
+        elif name == "iterate_objects":
+            try:
+                datasource_path = arguments["datasource_path"]
+                dataset_name = arguments["dataset_name"]
+                field_names = arguments.get("field_names", [])
+                max_count = arguments.get("max_count", 1000)
+                where_clause = arguments.get("where_clause", "")
+
+                ds_info = DatasourceConnectionInfo(datasource_path)
+                ds = open_datasource(ds_info)
+                if ds is None:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"无法打开数据源: {datasource_path}"
+                    }, indent=2))]
+
+                dataset = ds[dataset_name]
+                if dataset is None:
+                    ds.close()
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"数据集中不存在: {dataset_name}"
+                    }, indent=2))]
+
+                # 获取字段信息
+                all_fields = [f.name for f in dataset.field_infos]
+                if not field_names:
+                    field_names = all_fields
+                else:
+                    field_names = [f for f in field_names if f in all_fields]
+
+                objects = []
+                count = 0
+                for record in dataset.get_records():
+                    if count >= max_count:
+                        break
+                    obj = {"id": record.get_value("SmID") if "SmID" in all_fields else count}
+                    obj["field_values"] = {f: str(record.get_value(f)) for f in field_names}
+                    geom = record.geometry
+                    obj["geometry_type"] = type(geom).__name__ if geom else None
+                    objects.append(obj)
+                    count += 1
+
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "dataset_name": dataset_name,
+                    "datasource_path": datasource_path,
+                    "total_count": count,
+                    "field_names": field_names,
+                    "objects": objects
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "迭代对象 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "iterate_datasets":
+            try:
+                datasource_path = arguments["datasource_path"]
+                type_filter = arguments.get("dataset_type_filter", "")
+
+                ds_info = DatasourceConnectionInfo(datasource_path)
+                ds = open_datasource(ds_info)
+                if ds is None:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"无法打开数据源: {datasource_path}"
+                    }, indent=2))]
+
+                datasets = []
+                type_map = {
+                    "point": iobs.DatasetType.POINT,
+                    "line": iobs.DatasetType.LINE,
+                    "region": iobs.DatasetType.REGION,
+                    "grid": iobs.DatasetType.GRID,
+                    "image": iobs.DatasetType.IMAGE,
+                }
+                target_type = type_map.get(type_filter.lower()) if type_filter else None
+
+                for name in ds.get_dataset_names():
+                    dataset = ds[name]
+                    if dataset is None:
+                        continue
+                    if target_type and dataset.type != target_type:
+                        continue
+                    info = {
+                        "name": name,
+                        "type": str(dataset.type).replace("DatasetType.", ""),
+                        "record_count": dataset.record_count if hasattr(dataset, "record_count") else 0,
+                    }
+                    if hasattr(dataset, "field_infos"):
+                        info["fields"] = [f.name for f in dataset.field_infos]
+                    datasets.append(info)
+
+                ds.close()
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "datasource_path": datasource_path,
+                    "dataset_count": len(datasets),
+                    "datasets": datasets
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "迭代数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "iterate_files":
+            try:
+                directory = arguments["directory"]
+                extension_filter = arguments.get("extension_filter", "")
+                recursive = arguments.get("recursive", False)
+                max_count = arguments.get("max_count", 1000)
+
+                if not os.path.isdir(directory):
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"目录不存在: {directory}"
+                    }, indent=2))]
+
+                extensions = [ext.strip().lower() for ext in extension_filter.split(",")] if extension_filter else []
+                files = []
+                count = 0
+
+                if recursive:
+                    for root, dirs, filenames in os.walk(directory):
+                        for filename in filenames:
+                            if count >= max_count:
+                                break
+                            if extensions and not any(filename.lower().endswith(ext) for ext in extensions):
+                                continue
+                            filepath = os.path.join(root, filename)
+                            stat = os.stat(filepath)
+                            files.append({
+                                "name": filename,
+                                "path": filepath,
+                                "size": stat.st_size,
+                                "modified_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                            })
+                            count += 1
+                        if count >= max_count:
+                            break
+                else:
+                    for filename in os.listdir(directory):
+                        if count >= max_count:
+                            break
+                        filepath = os.path.join(directory, filename)
+                        if not os.path.isfile(filepath):
+                            continue
+                        if extensions and not any(filename.lower().endswith(ext) for ext in extensions):
+                            continue
+                        stat = os.stat(filepath)
+                        files.append({
+                            "name": filename,
+                            "path": filepath,
+                            "size": stat.st_size,
+                            "modified_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                        })
+                        count += 1
+
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "directory": directory,
+                    "file_count": len(files),
+                    "files": files
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "迭代文件 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "iterate_directories":
+            try:
+                directory = arguments["directory"]
+                max_depth = arguments.get("max_depth", 3)
+                max_count = arguments.get("max_count", 500)
+
+                if not os.path.isdir(directory):
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"目录不存在: {directory}"
+                    }, indent=2))]
+
+                subdirectories = []
+                count = 0
+                for root, dirs, files in os.walk(directory):
+                    depth = root.replace(directory, "").count(os.sep)
+                    if depth > max_depth:
+                        continue
+                    for dirname in dirs:
+                        if count >= max_count:
+                            break
+                        dirpath = os.path.join(root, dirname)
+                        subdirectories.append({
+                            "name": dirname,
+                            "path": dirpath,
+                            "depth": depth,
+                            "file_count": len(os.listdir(dirpath)) if os.path.isdir(dirpath) else 0
+                        })
+                        count += 1
+                    if count >= max_count:
+                        break
+
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "directory": directory,
+                    "subdirectory_count": len(subdirectories),
+                    "subdirectories": subdirectories
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "迭代目录 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "condition_equal":
+            try:
+                value_a = arguments["value_a"]
+                value_b = arguments["value_b"]
+                compare_type = arguments.get("compare_type", "exact")
+
+                result = False
+                if compare_type == "exact":
+                    result = value_a == value_b
+                elif compare_type == "numeric":
+                    try:
+                        result = float(value_a) == float(value_b)
+                    except (ValueError, TypeError):
+                        result = False
+                elif compare_type == "case_insensitive":
+                    result = str(value_a).lower() == str(value_b).lower()
+                elif compare_type == "contains":
+                    result = str(value_b) in str(value_a)
+
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "result": result,
+                    "value_a": value_a,
+                    "value_b": value_b,
+                    "compare_type": compare_type
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "条件判断 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "format_date":
+            try:
+                date_input = arguments["date_input"]
+                output_format = arguments.get("output_format", "%Y-%m-%d %H:%M:%S")
+                input_format = arguments.get("input_format", "")
+
+                from datetime import datetime
+
+                # 尝试解析输入日期
+                dt = None
+                if input_format:
+                    dt = datetime.strptime(date_input, input_format)
+                else:
+                    # 尝试多种常见格式
+                    formats = [
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%d",
+                        "%Y/%m/%d %H:%M:%S",
+                        "%Y/%m/%d",
+                        "%d-%m-%Y",
+                        "%m/%d/%Y",
+                        "%Y%m%d%H%M%S",
+                        "%Y%m%d",
+                    ]
+                    for fmt in formats:
+                        try:
+                            dt = datetime.strptime(date_input, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    # 尝试时间戳
+                    if dt is None:
+                        try:
+                            timestamp = float(date_input)
+                            dt = datetime.fromtimestamp(timestamp)
+                        except (ValueError, TypeError, OSError):
+                            pass
+
+                if dt is None:
+                    return [TextContent(type="text", text=json.dumps({
+                        "status": "error", "message": f"无法解析日期: {date_input}"
+                    }, indent=2))]
+
+                output = dt.strftime(output_format)
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "input": date_input,
+                    "output": output,
+                    "format": output_format,
+                    "iso": dt.isoformat()
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "日期格式化 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "replace_text":
+            try:
+                text = arguments["text"]
+                old_value = arguments["old_value"]
+                new_value = arguments["new_value"]
+                use_regex = arguments.get("use_regex", False)
+                case_sensitive = arguments.get("case_sensitive", True)
+
+                if use_regex:
+                    import re
+                    flags = 0 if case_sensitive else re.IGNORECASE
+                    replaced, count = re.subn(old_value, new_value, text, flags=flags)
+                else:
+                    if case_sensitive:
+                        count = text.count(old_value)
+                        replaced = text.replace(old_value, new_value)
+                    else:
+                        import re
+                        count = len(re.findall(re.escape(old_value), text, re.IGNORECASE))
+                        replaced = re.sub(re.escape(old_value), new_value, text, flags=re.IGNORECASE)
+
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success",
+                    "original": text,
+                    "replaced": replaced,
+                    "replace_count": count,
+                    "use_regex": use_regex,
+                    "case_sensitive": case_sensitive
+                }, indent=2, ensure_ascii=False))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "文本替换 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
         else:
             return [TextContent(type="text", text=json.dumps({
-                "status": "error", "message": f"未知 iServer 工具: {name}"
+                "status": "error", "message": f"未知工具: {name}"
             }, indent=2))]
     
     except Exception as e:
