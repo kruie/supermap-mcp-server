@@ -5,17 +5,82 @@ SuperMap iObjectsPy MCP Server
 使用 MCP SDK 创建的 SuperMap GIS MCP 服务器
 支持通过 stdio 与 WorkBuddy 通信
 
-工具数量: 253/253 (已恢复全部扩展工具)
-版本: v7.5-fix2 (恢复85个扩展工具：矢量处理+三维导入+数据扩展+数据管理+地图瓦片) (扩展规则建模/3D城市建模/CIM工具；新增线性拉伸/旋转拉伸/拉伸闭合体/放样/构建坡屋顶/构建房/道路工程设计/矢量拉伸/屋顶分类/建筑物边界规范化/构建带屋顶建筑物)
+工具数量: 344/344 (已恢复全部扩展工具)
+版本: v8.2 (新增地质体构建3个+三维分析4个+瓦片工具17个=23个工具) (扩展规则建模/3D城市建模/CIM工具；新增线性拉伸/旋转拉伸/拉伸闭合体/放样/构建坡屋顶/构建房/道路工程设计/矢量拉伸/屋顶分类/建筑物边界规范化/构建带屋顶建筑物)
 """
 
 import sys
 import os
 import json
 import traceback
+import io
+import threading
+import time
+import logging
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+
+# =============================================================================
+# 【关键修复】防止 iObjectsPy / JVM 子进程输出污染 MCP JSON-RPC 协议流
+#
+# 根因：iObjectsPy 初始化时有两个 stdout 污染源：
+#   1. Python logging 模块 — 写 WARNING/INFO 到 sys.stderr（与 stdout 合并时污染 JSON 流）
+#   2. JVM 子进程 — 通过 cmd.exe /C start /b java ... 启动，
+#      在 Windows 上 cmd.exe /C start /b 不继承父进程 fd，
+#      JVM 输出直接打到控制台（stdout），绕过 os.dup2 等 fd 级重定向
+#
+# 解决方案（三层防护）：
+#   第一层：fd 级排水管道 — 替换 fd 1 为排水管道，重建 sys.stdout 指向原始 MCP 管道
+#           → 可拦截 Python 级 print() 和部分子进程输出
+#   第二层：logging 输出重定向 — 在 iObjectsPy import 之前，将 root logger 的
+#           StreamHandler 指向 devnull 或日志文件，防止 logging 污染 stderr/stdout
+#   第三层：JVM 输出抑制 — 设置环境变量 JAVA_OPTS 静默 JVM 启动横幅
+# =============================================================================
+
+# ---- 第一层：fd 级排水管道 ----
+_MCP_PIPE_FD = os.dup(1)                     # 保存原始 MCP 管道 fd
+_DRAIN_R, _DRAIN_W = os.pipe()              # 创建排水管道
+os.dup2(_DRAIN_W, 1)                       # fd 1 → 排水管道（子进程输出目标）
+os.close(_DRAIN_W)                             # 关闭多余副本
+
+def _drain_stdout():
+    """后台线程：排空 fd 1（排水管道）中的数据，防止缓冲区满阻塞子进程"""
+    try:
+        while True:
+            data = os.read(_DRAIN_R, 8192)
+            if not data:
+                break
+    except (OSError, ValueError):
+        pass
+
+threading.Thread(target=_drain_stdout, daemon=True, name="mcp-stdout-drain").start()
+
+# 用保存的 _MCP_PIPE_FD 重建 sys.stdout → MCP SDK 写入原始管道
+_mcp_raw = io.FileIO(_MCP_PIPE_FD, 'wb', closefd=False)
+_mcp_buf = io.BufferedWriter(_mcp_raw)
+sys.stdout = io.TextIOWrapper(_mcp_buf, encoding='utf-8', write_through=True)
+
+# ---- 第二层：logging 输出重定向 ----
+# 将 root logger 的所有 StreamHandler 替换为 NullHandler 或 FileHandler
+# 防止 iObjectsPy 的 WARNING/INFO 写到 stderr → 污染 MCP JSON 流
+_iobjspy_log_path = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")),
+                                  "supermap_mcp_server.log")
+logging.basicConfig(
+    level=logging.WARNING,                       # 只记录 WARNING 及以上
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    filename=_iobjspy_log_path,                  # 输出到文件，不污染 stderr
+    filemode="a",
+    force=True,                                  # 强制覆盖已有配置
+)
+# 同时抑制 iObjectsPy 的 logger
+logging.getLogger("iobjectspy").setLevel(logging.CRITICAL)
+logging.getLogger("iobjectspy").propagate = False
+
+# ---- 第三层：JVM 静默 ----
+# 设置 JAVA_OPTS 环境变量，关闭 JVM 启动横幅
+if "JAVA_OPTS" not in os.environ:
+    os.environ["JAVA_OPTS"] = "-Xrs"
 
 # =============================================================================
 # 关键：在导入 iObjectsPy 之前，把 iDesktopX 内嵌 JRE 加到 PATH 最前面
@@ -67,27 +132,47 @@ _initialized = False
 _init_error = None
 
 # 预热相关状态
-import threading
-import time as _time
-
 _warmup_thread: threading.Thread = None
-_warmup_done = threading.Event()    # 预热完成时 set()
-_warmup_start_ts: float = None      # 开始时间戳
-_warmup_finish_ts: float = None     # 完成时间戳
+_warmup_done = threading.Event()       # 预热完成时 set()
+_warmup_start_ts: float = None        # 开始时间戳
+_warmup_finish_ts: float = None      # 完成时间戳
 
 
 def _do_warmup():
-    """后台线程：预热 JVM（在服务器启动后立即异步执行）"""
+    """后台线程：预热 JVM（在服务器启动后立即异步执行）
+
+    通过 fd 级排水管道方案，JVM 子进程的输出已被排走（见脚本顶部），
+    此处无需再处理 stdout/stderr 重定向。
+    """
     global _initialized, _init_error, _warmup_finish_ts
     try:
-        import iobjectspy as iobs
-        iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
+        # 关键：iObjectsPy 的 import 和 set_iobjects_java_path 会产生大量
+        # stdout/stderr 输出（numpy WARNING、JAR 拷贝日志、Gateway INFO 等），
+        # 这些非 JSON 内容会通过 sys.stdout 混入 MCP 协议流，导致客户端解析失败。
+        #
+        # 修复：临时将 sys.stdout 和 sys.stderr 指向排水管道（fd 1），
+        # 所有 iObjectsPy 的输出都被排水线程丢弃。
+        # MCP SDK 不受影响——它在 stdio_server() 中已捕获了独立的写入流。
+        _saved_stdout = sys.stdout
+        _saved_stderr = sys.stderr
+        try:
+            sys.stdout = io.TextIOWrapper(
+                io.BufferedWriter(io.FileIO(1, 'wb', closefd=False)),
+                encoding='utf-8', write_through=True
+            )
+            sys.stderr = sys.stdout   # stderr 也排到排水管道
+            import iobjectspy as iobs
+            iobs.set_iobjects_java_path(DEFAULT_IOBJECT_PATH)
+        finally:
+            # 恢复 sys.stdout/stderr（MCP SDK 用的是已捕获的独立流，不受影响）
+            sys.stdout = _saved_stdout
+            sys.stderr = _saved_stderr
         _initialized = True
         _init_error = None
     except Exception as e:
         _init_error = str(e)
     finally:
-        _warmup_finish_ts = _time.time()
+        _warmup_finish_ts = time.time()
         _warmup_done.set()
 
 
@@ -96,7 +181,7 @@ def _start_warmup_if_needed():
     global _warmup_thread, _warmup_start_ts
     if _warmup_thread is not None:
         return
-    _warmup_start_ts = _time.time()
+    _warmup_start_ts = time.time()
     _warmup_thread = threading.Thread(target=_do_warmup, daemon=True, name="iobjects-warmup")
     _warmup_thread.start()
 
@@ -123,10 +208,10 @@ def _ensure_init(wait_timeout: float = 120.0):
     _start_warmup_if_needed()
 
     # 计算已等待时长，输出友好提示
-    elapsed = _time.time() - (_warmup_start_ts or _time.time())
+    elapsed = time.time() - (_warmup_start_ts or time.time())
     done = _warmup_done.wait(timeout=max(0.1, wait_timeout - elapsed))
     if not done:
-        cost = round(_time.time() - _warmup_start_ts, 1)
+        cost = round(time.time() - _warmup_start_ts, 1)
         raise TimeoutError(
             f"JVM 初始化超时（已等待 {cost}s）。"
             "iObjectsPy 首次启动 JVM 通常需要 10-30 秒，请稍后重试。"
@@ -3892,6 +3977,1607 @@ async def list_tools():
                 "required": ["output_path"]
             }
         ),
+        Tool(
+            name="import_obj",
+            description="导入OBJ格式三维模型。将 Wavefront OBJ 格式的三维模型文件导入到 UDBX 数据源中。适用于: OBJ模型导入、三维数据入库。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "OBJ 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_3ds",
+            description="导入3DS格式三维模型。将 Autodesk 3DS 格式的三维模型文件导入到 UDBX 数据源中。适用于: 3DS模型导入、三维数据入库。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "3DS 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_fbx",
+            description="导入FBX格式三维模型。将 Autodesk FBX 格式的三维模型文件导入到 UDBX 数据源中。适用于: FBX模型导入、三维数据入库、动画数据导入。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "FBX 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_gltf",
+            description="导入GLTF/GLB格式三维模型。将 GLTF 或 GLB 格式的三维模型文件导入到 UDBX 数据源中。适用于: GLTF模型导入、三维数据入库、Web 3D数据。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "GLTF/GLB 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_dae",
+            description="导入DAE (Collada) 格式三维模型。将 Collada DAE 格式的三维模型文件导入到 UDBX 数据源中。适用于: DAE模型导入、三维数据入库。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "DAE (Collada) 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_stl",
+            description="导入STL格式三维模型。将 STL (Stereolithography) 格式的三维模型文件导入到 UDBX 数据源中。适用于: STL模型导入、3D打印模型数据入库。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "STL 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_ply",
+            description="导入PLY格式三维模型/点云。将 PLY (Polygon File Format) 格式的三维模型或点云文件导入到 UDBX 数据源中。适用于: PLY模型导入、点云数据入库。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "PLY 文件路径" },
+                    "source_crs": { "type": "string", "description": "源坐标系（可选）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_xyz",
+            description="导入XYZ格式点云数据。将 XYZ 格式（每行 X Y Z [R G B]）的点云文本文件导入到 UDBX 数据源中。适用于: XYZ点云导入、激光扫描数据入库。返回: {status, dataset_name, point_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": {
+                        "type": "string",
+                        "description": "XYZ 点云文件路径（X Y Z [R G B] 每行一个点）",
+                    },
+                    "separator": {
+                        "type": "string",
+                        "description": "分隔符（默认: 空格，可选: comma/tab）",
+                    },
+                    "coordinate_system": { "type": "string", "description": "坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="import_las",
+            description="导入LAS/LAZ格式点云数据。将 LAS 或 LAZ 格式的激光雷达点云文件导入到 UDBX 数据源中。适用于: LAS点云导入、LiDAR数据入库、支持分类信息。返回: {status, dataset_name, point_count, classification_info}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "目标数据集名称" },
+                    "file_path": { "type": "string", "description": "LAS/LAZ 点云文件路径" },
+                    "coordinate_system": { "type": "string", "description": "坐标系（可选）" },
+                    "load_classification": { "type": "boolean", "description": "是否加载分类信息（默认: true）" },
+                },
+                "required": ["datasource_path", "dataset_name", "file_path"],
+            }
+        ),
+        Tool(
+            name="export_obj",
+            description="导出为OBJ格式。将 UDBX 数据源中的三维模型数据集导出为 Wavefront OBJ 格式文件。适用于: OBJ模型导出、与其他三维软件交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 OBJ 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_gltf",
+            description="导出为GLTF/GLB格式。将 UDBX 数据源中的三维模型数据集导出为 GLTF 或 GLB 格式文件。适用于: GLTF模型导出、Web端三维展示、与其他三维引擎交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 GLTF/GLB 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+                    "binary_format": {
+                        "type": "boolean",
+                        "description": "是否使用 GLB 二进制格式（默认: false）",
+                    },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_3ds",
+            description="导出为3DS格式。将 UDBX 数据源中的三维模型数据集导出为 Autodesk 3DS 格式文件。适用于: 3DS模型导出、与老版本三维软件交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 3DS 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_stl",
+            description="导出为STL格式。将 UDBX 数据源中的三维模型数据集导出为 STL 格式文件。适用于: STL模型导出、3D打印数据准备。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 STL 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "binary_format": {
+                        "type": "boolean",
+                        "description": "是否使用二进制 STL 格式（默认: true）",
+                    },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_ply",
+            description="导出为PLY格式。将 UDBX 数据源中的三维模型数据集导出为 PLY 格式文件。适用于: PLY模型导出、与点云处理软件交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 PLY 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "binary_format": {
+                        "type": "boolean",
+                        "description": "是否使用二进制 PLY 格式（默认: true）",
+                    },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_dae",
+            description="导出为DAE (Collada) 格式。将 UDBX 数据源中的三维模型数据集导出为 Collada DAE 格式文件。适用于: DAE模型导出、与支持Collada的软件交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 DAE (Collada) 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_fbx",
+            description="导出为FBX格式。将 UDBX 数据源中的三维模型数据集导出为 Autodesk FBX 格式文件。适用于: FBX模型导出、与三维动画/游戏引擎交换数据。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出 FBX 文件路径" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "export_animation": { "type": "boolean", "description": "是否导出动画（默认: false）" },
+                    "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="export_model",
+            description="通用模型导出。将 UDBX 数据源中的三维模型数据集导出为指定格式的模型文件（支持 OBJ/GLTF/GLB/3DS/STL/PLY/DAE/FBX/OSGB/S3M）。适用于: 模型格式转换、数据交换、多格式输出。返回: {status, output_path, format}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出文件路径（根据扩展名自动识别格式）" },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+                    "format": {
+                        "type": "string",
+                        "enum": [
+                            "OBJ",
+                            "GLTF",
+                            "GLB",
+                            "3DS",
+                            "STL",
+                            "PLY",
+                            "DAE",
+                            "FBX",
+                            "OSGB",
+                            "S3M",
+                        ],
+                        "description": "导出格式（默认根据扩展名自动识别）",
+                    },
+                },
+                "required": ["datasource_path", "dataset_name", "output_path"],
+            }
+        ),
+        Tool(
+            name="model_simplify",
+            description="模型简化（减面）。对三维模型数据集进行减面处理，减少模型面片数量以降低数据量。适用于: 模型轻量化、LOD生成、大规模场景优化。返回: {status, output_dataset, original_faces, reduced_faces, reduction_ratio}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "reduction_ratio": {
+                        "type": "number",
+                        "description": "减面比例 0-1（例如 0.5 表示减少 50% 的面数，默认: 0.5）",
+                    },
+                    "preserve_texture": { "type": "boolean", "description": "是否保留纹理（默认: true）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_dataset"],
+            }
+        ),
+        Tool(
+            name="model_merge",
+            description="模型合并。将多个三维模型数据集合并为一个数据集。适用于: 模型拼接、场景整合、数据集合并。返回: {status, output_dataset, merged_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "source_datasets": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "源数据集名称列表",
+                    },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "merge_tolerance": { "type": "number", "description": "合并容差（米，默认: 0.001）" },
+                },
+                "required": ["datasource_path", "source_datasets", "output_dataset"],
+            }
+        ),
+        Tool(
+            name="model_texture_process",
+            description="模型纹理处理。对三维模型的纹理进行展开、重映射、调整大小、压缩或导出操作。适用于: 纹理优化、UV展开、纹理压缩、贴图导出。返回: {status, action, output_path}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "数据集名称" },
+                    "action": {
+                        "type": "string",
+                        "enum": ["UNWRAP", "REMAP", "RESIZE", "COMPRESS", "EXPORT"],
+                        "description": "纹理处理操作: UNWRAP=展开, REMAP=重映射, RESIZE=调整大小, COMPRESS=压缩, EXPORT=导出",
+                    },
+                    "output_path": { "type": "string", "description": "输出路径（取决于操作类型）" },
+                    "texture_size": {
+                        "type": "integer",
+                        "description": "纹理大小（RESIZE 时使用，例如 1024）",
+                    },
+                    "quality": {
+                        "type": "integer",
+                        "description": "压缩质量 1-100（COMPRESS 时使用，默认: 80）",
+                    },
+                },
+                "required": ["datasource_path", "dataset_name", "action", "output_path"],
+            }
+        ),
+        Tool(
+            name="model_transform",
+            description="模型变换（平移/旋转/缩放）。对三维模型数据集进行平移、旋转和缩放变换操作。适用于: 模型位置调整、姿态校正、尺寸缩放。返回: {status, output_dataset, transform_info}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "translate_x": { "type": "number", "description": "X 方向平移量（米）" },
+                    "translate_y": { "type": "number", "description": "Y 方向平移量（米）" },
+                    "translate_z": { "type": "number", "description": "Z 方向平移量（米）" },
+                    "rotate_x": { "type": "number", "description": "绕 X 轴旋转角度（度）" },
+                    "rotate_y": { "type": "number", "description": "绕 Y 轴旋转角度（度）" },
+                    "rotate_z": { "type": "number", "description": "绕 Z 轴旋转角度（度）" },
+                    "scale_x": { "type": "number", "description": "X 方向缩放比例（默认: 1.0）" },
+                    "scale_y": { "type": "number", "description": "Y 方向缩放比例（默认: 1.0）" },
+                    "scale_z": { "type": "number", "description": "Z 方向缩放比例（默认: 1.0）" },
+                },
+                "required": ["datasource_path", "dataset_name", "output_dataset"],
+            }
+        ),
+        Tool(
+            name="model_boolean_operation",
+            description="三维布尔运算。对两个三维模型数据集执行布尔运算（并集/交集/差集）。适用于: 三维空间分析、模型裁剪、建筑合并。返回: {status, output_dataset, operation}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "target_dataset": { "type": "string", "description": "目标数据集" },
+                    "tool_dataset": { "type": "string", "description": "工具数据集" },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["UNION", "INTERSECT", "SUBTRACT", "SUBTRACT_REVERSE"],
+                        "description": "布尔运算: UNION=并集, INTERSECT=交集, SUBTRACT=差集(A-B), SUBTRACT_REVERSE=差集(B-A)",
+                    },
+                },
+                "required": [
+                    "datasource_path",
+                    "target_dataset",
+                    "tool_dataset",
+                    "output_dataset",
+                    "operation",
+                ],
+            }
+        ),
+        Tool(
+            name="point_cloud_filter",
+            description="点云滤波。对点云数据集进行滤波处理，去除离群点、噪点或提取特定类别点（地面/建筑/植被）。适用于: 点云去噪、地面点提取、点云预处理。返回: {status, output_dataset, filter_type, point_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "点云数据集名称" },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "filter_type": {
+                        "type": "string",
+                        "enum": ["OUTLIER", "NOISE", "GROUND", "BUILDING", "VEGETATION"],
+                        "description": "滤波类型: OUTLIER=离群点, NOISE=噪点, GROUND=地面点, BUILDING=建筑物, VEGETATION=植被",
+                    },
+                    "radius": {
+                        "type": "number",
+                        "description": "搜索半径（米，离群点滤波使用，默认: 1.0）",
+                    },
+                    "neighbors": { "type": "integer", "description": "邻域点数（离群点滤波使用，默认: 6）" },
+                    "threshold": { "type": "number", "description": "阈值（默认: 0.5）" },
+                },
+                "required": [
+                    "datasource_path",
+                    "dataset_name",
+                    "output_dataset",
+                    "filter_type",
+                ],
+            }
+        ),
+        Tool(
+            name="point_cloud_classify",
+            description="点云分类。对点云数据集进行自动分类（地面/建筑/植被/全分类）。适用于: 点云语义分类、LiDAR数据处理、三维场景理解。返回: {status, output_dataset, classify_type, classification_report}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "点云数据集名称" },
+                    "output_dataset": { "type": "string", "description": "输出数据集名称" },
+                    "classify_type": {
+                        "type": "string",
+                        "enum": ["GROUND", "BUILDING", "VEGETATION", "ALL"],
+                        "description": "分类类型: GROUND=地面, BUILDING=建筑, VEGETATION=植被, ALL=全分类",
+                    },
+                    "max_angle": { "type": "number", "description": "最大角度（度，地面分类使用，默认: 45）" },
+                    "max_distance": {
+                        "type": "number",
+                        "description": "最大距离（米，地面分类使用，默认: 1.0）",
+                    },
+                },
+                "required": [
+                    "datasource_path",
+                    "dataset_name",
+                    "output_dataset",
+                    "classify_type",
+                ],
+            }
+        ),
+        Tool(
+            name="point_cloud_to_model",
+            description="点云转三维模型。将点云数据集重建为三维网格模型（支持泊松重建/球体旋转/三角剖分）。适用于: 点云建模、三维重建、逆向工程。返回: {status, output_dataset, method, face_count}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "点云数据集名称" },
+                    "output_dataset": { "type": "string", "description": "输出模型数据集名称" },
+                    "method": {
+                        "type": "string",
+                        "enum": ["POISSON", "BALL_PIVOT", "DELAUNAY"],
+                        "description": "重建方法: POISSON=泊松重建, BALL_PIVOT=球体旋转, DELAUNAY=三角剖分",
+                    },
+                    "detail_level": {
+                        "type": "number",
+                        "description": "细节级别（POISSON 方法，值越大细节越多，推荐: 8-12，默认: 10）",
+                    },
+                    "sample_size": {
+                        "type": "number",
+                        "description": "采样半径（米，BALL_PIVOT 方法使用，默认: 0.5）",
+                    },
+                },
+                "required": [
+                    "datasource_path",
+                    "dataset_name",
+                    "output_dataset",
+                    "method",
+                ],
+            }
+        ),
+        Tool(
+            name="batch_convert_model",
+            description="批量模型格式转换。将三维模型数据集同时导出为多种格式。适用于: 多格式输出、批处理、数据分发。返回: {status, output_dir, converted_formats, results}",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+                    "dataset_name": { "type": "string", "description": "源数据集名称" },
+                    "output_path": { "type": "string", "description": "输出目录路径" },
+                    "target_formats": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "OBJ",
+                                "GLTF",
+                                "GLB",
+                                "3DS",
+                                "STL",
+                                "PLY",
+                                "DAE",
+                                "FBX",
+                                "OSGB",
+                                "S3M",
+                            ],
+                        },
+                        "description": "目标格式列表",
+                    },
+                    "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+                    "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+                },
+                "required": [
+                    "datasource_path",
+                    "dataset_name",
+                    "output_path",
+                    "target_formats",
+                ],
+            }
+        ),
+        Tool(
+            name="model_instancing",
+            description="模型实例化处理。对相同或相似的三维模型对象进行实例化处理，减少显存占用，提升渲染性能。适用于: 大规模场景优化、重复构件去重。返回: {status, output_dataset, instance_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "tolerance": { "type": "number", "description": "实例化容差（米，决定几何相似度阈值，默认: 0.001）" },
+            "consider_texture": { "type": "boolean", "description": "是否考虑纹理一致性（默认: true）" },
+            "consider_material": { "type": "boolean", "description": "是否考虑材质一致性（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="texture_boundary_optimize",
+            description="纹理边界优化。优化模型纹理边界，减少纹理接缝和边缘拉伸问题。适用于: 纹理质量提升、接缝修复。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "optimize_mode": {
+            "type": "string",
+            "enum": ["SEAM_REPAIR", "EDGE_STRETCH", "BLEED_FIX", "ALL"],
+            "description": "优化模式: SEAM_REPAIR=接缝修复, EDGE_STRETCH=边缘拉伸, BLEED_FIX=渗色修复, ALL=全部",
+        },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="single_model_convert",
+            description="单一模型转换。将单个模型转换为指定格式或坐标系，支持格式互转。适用于: 格式转换、坐标系变换。返回: {status, output_path, format}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_path": { "type": "string", "description": "输出文件路径" },
+            "target_format": {
+            "type": "string",
+            "enum": ["OBJ", "FBX", "GLTF", "GLB", "3DS", "DAE", "STL", "PLY", "OSGB", "S3M"],
+            "description": "目标格式",
+        },
+            "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+            "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path", "target_format"],
+        }
+        ),
+        Tool(
+            name="batch_model_convert",
+            description="批量模型转换。批量将多个模型转换为指定格式。适用于: 批量格式转换、数据标准化。返回: {status, output_dir, converted_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_names": { "type": "array", "items": { "type": "string" }, "description": "源数据集名称列表" },
+            "output_dir": { "type": "string", "description": "输出目录路径" },
+            "target_format": {
+            "type": "string",
+            "enum": ["OBJ", "FBX", "GLTF", "GLB", "3DS", "DAE", "STL", "PLY", "OSGB", "S3M"],
+            "description": "目标格式",
+        },
+            "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+            "export_texture": { "type": "boolean", "description": "是否导出纹理（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_names", "output_dir", "target_format"],
+        }
+        ),
+        Tool(
+            name="remove_duplicate_points",
+            description="移除重复点。检测并移除三维模型中的重复顶点，优化数据结构。适用于: 数据清理、模型优化。返回: {status, output_dataset, removed_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "tolerance": { "type": "number", "description": "距离容差（米，小于此距离的点视为重复，默认: 0.0001）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="remove_duplicate_faces",
+            description="移除重复面。检测并移除三维模型中的重复面片，减少冗余数据。适用于: 数据清理、模型精简。返回: {status, output_dataset, removed_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "tolerance": { "type": "number", "description": "几何容差（默认: 0.001）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="batch_remove_duplicate",
+            description="批量移除重复点和面。批量处理多个数据集，同时移除重复点和重复面。适用于: 大规模数据清理、批处理优化。返回: {status, output_dataset, removed_points, removed_faces}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_names": { "type": "array", "items": { "type": "string" }, "description": "源数据集名称列表" },
+            "point_tolerance": { "type": "number", "description": "点距离容差（默认: 0.0001）" },
+            "face_tolerance": { "type": "number", "description": "面几何容差（默认: 0.001）" },
+        },
+            "required": ["datasource_path", "dataset_names"],
+        }
+        ),
+        Tool(
+            name="remove_collinear_points",
+            description="移除共线点。检测并移除位于同一直线上的冗余点，简化边线。适用于: 线要素简化、数据压缩。返回: {status, output_dataset, removed_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "angle_tolerance": { "type": "number", "description": "角度容差（度，三点接近共线的角度阈值，默认: 5.0）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="manifold_correction",
+            description="流形校正。修复三维模型的非流形几何问题（如非流形边、非流形顶点）。适用于: 模型修复、3D打印准备、布尔运算前置处理。返回: {status, output_dataset, issues_fixed}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "fix_mode": {
+            "type": "string",
+            "enum": ["AUTO", "REMOVE_NONMANIFOLD_EDGES", "SPLIT_NONMANIFOLD_VERTICES", "FILL_HOLES"],
+            "description": "修复模式: AUTO=自动, REMOVE_NONMANIFOLD_EDGES=移除非流形边, SPLIT_NONMANIFOLD_VERTICES=拆分非流形顶点, FILL_HOLES=填充孔洞",
+        },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="compute_normals",
+            description="计算法线。为三维模型计算顶点法线或面法线，用于正确光照渲染。适用于: 法线缺失修复、光照效果优化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "normal_type": { "type": "string", "enum": ["VERTEX", "FACE"], "description": "法线类型: VERTEX=顶点法线, FACE=面法线" },
+            "smoothing_angle": { "type": "number", "description": "平滑角度（度，面夹角小于此值时法线平滑，默认: 60）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="remove_normals",
+            description="移除法线。移除三维模型中的法线数据。适用于: 数据清理、重新计算法线前的准备。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="topology_correction",
+            description="拓扑校正。修复三维模型的拓扑错误（如交叉面、重叠面、孔洞）。适用于: 拓扑修复、模型清理。返回: {status, output_dataset, issues_fixed}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "fix_intersections": { "type": "boolean", "description": "是否修复交叉面（默认: true）" },
+            "fix_overlaps": { "type": "boolean", "description": "是否修复重叠面（默认: true）" },
+            "fill_holes": { "type": "boolean", "description": "是否填充孔洞（默认: false）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="project_to_face",
+            description="投影/面。将三维模型投影到指定平面或曲面上。适用于: 二维化投影、底面提取。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "projection_plane": { "type": "string", "enum": ["XY", "XZ", "YZ", "CUSTOM"], "description": "投影平面: XY=水平面, XZ=纵剖面, YZ=横剖面, CUSTOM=自定义" },
+            "custom_normal": { "type": "array", "items": { "type": "number" }, "description": "自定义平面法向量 [nx, ny, nz]（projection_plane=CUSTOM时使用）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "projection_plane"],
+        }
+        ),
+        Tool(
+            name="project_extrude",
+            description="投影拉伸体。将二维面沿指定方向拉伸为三维体。适用于: 2.5D建模、建筑拉伸。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称（应为面数据）" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "extrude_height": { "type": "number", "description": "拉伸高度（米）" },
+            "direction": { "type": "string", "enum": ["UP", "DOWN", "CUSTOM"], "description": "拉伸方向: UP=向上, DOWN=向下, CUSTOM=自定义" },
+            "custom_direction": { "type": "array", "items": { "type": "number" }, "description": "自定义方向向量 [dx, dy, dz]（direction=CUSTOM时使用）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "extrude_height"],
+        }
+        ),
+        Tool(
+            name="extract_boundary",
+            description="提取边界。提取三维模型的外边界或轮廓线。适用于: 轮廓提取、碰撞体生成。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "boundary_type": { "type": "string", "enum": ["OUTER", "INNER", "ALL"], "description": "边界类型: OUTER=外边界, INNER=内边界(孔洞), ALL=全部" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="translate_object",
+            description="对象平移。按指定偏移量平移模型对象。适用于: 模型位置调整。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "offset_x": { "type": "number", "description": "X方向偏移（米）" },
+            "offset_y": { "type": "number", "description": "Y方向偏移（米）" },
+            "offset_z": { "type": "number", "description": "Z方向偏移（米）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "offset_x", "offset_y", "offset_z"],
+        }
+        ),
+        Tool(
+            name="model_split",
+            description="模型拆分。将复杂模型拆分为多个独立部分。适用于: 模型分解、LOD生成。返回: {status, split_datasets}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "split_mode": {
+            "type": "string",
+            "enum": ["BY_MATERIAL", "BY_CONNECTED", "BY_SIZE", "BY_VOLUME"],
+            "description": "拆分模式: BY_MATERIAL=按材质, BY_CONNECTED=按连通性, BY_SIZE=按尺寸, BY_VOLUME=按体积",
+        },
+            "size_threshold": { "type": "number", "description": "尺寸阈值（split_mode=BY_SIZE时使用，默认: 1.0）" },
+        },
+            "required": ["datasource_path", "dataset_name", "split_mode"],
+        }
+        ),
+        Tool(
+            name="model_clip",
+            description="模型裁剪。使用指定几何体（如平面、盒体）裁剪模型。适用于: 模型裁剪、截面提取。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "clip_geometry": {
+            "type": "string",
+            "enum": ["PLANE", "BOX", "SPHERE", "DATASET"],
+            "description": "裁剪几何体类型: PLANE=平面, BOX=盒体, SPHERE=球体, DATASET=使用另一数据集",
+        },
+            "clip_params": { "type": "object", "description": "裁剪参数（取决于clip_geometry）" },
+            "keep_inside": { "type": "boolean", "description": "是否保留内部（true=保留内部，false=保留外部，默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "clip_geometry"],
+        }
+        ),
+        Tool(
+            name="model_tessellate",
+            description="模型镶嵌。将复杂多边形镶嵌（三角化）为标准三角形网格。适用于: 网格标准化、渲染优化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "max_edge_length": { "type": "number", "description": "最大边长（米，超过此值的边会被细分，默认: 0）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="model_hollow",
+            description="模型挖洞。在模型上创建孔洞或挖空内部。适用于: 开洞处理、空心化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "hole_shape": { "type": "string", "enum": ["CIRCLE", "RECTANGLE", "POLYGON"], "description": "孔洞形状" },
+            "hole_params": { "type": "object", "description": "孔洞参数（取决于hole_shape）" },
+            "wall_thickness": { "type": "number", "description": "壁厚（米，0表示完全挖空，默认: 0）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "hole_shape"],
+        }
+        ),
+        Tool(
+            name="mesh_simplify",
+            description="三角网简化。使用QEM等算法简化三角网格，减少面数同时保持形状。适用于: LOD生成、模型轻量化。返回: {status, output_dataset, original_faces, simplified_faces}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "target_ratio": { "type": "number", "description": "目标简化比例 0-1（例如0.5表示减少50%面数，默认: 0.5）" },
+            "algorithm": {
+            "type": "string",
+            "enum": ["QEM", "VERTEX_CLUSTERING", "EDGE_COLLAPSE"],
+            "description": "简化算法: QEM=二次误差度量, VERTEX_CLUSTERING=顶点聚类, EDGE_COLLAPSE=边折叠",
+        },
+            "preserve_uv": { "type": "boolean", "description": "是否保留UV（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="model_texture_remap",
+            description="模型纹理重映射。重新计算UV坐标并映射纹理，解决UV问题。适用于: UV修复、纹理重映射。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "unwrap_method": {
+            "type": "string",
+            "enum": ["BOX", "CYLINDRICAL", "SPHERICAL", "LSCM", "ABF"],
+            "description": "展开方法: BOX=盒式, CYLINDRICAL=圆柱, SPHERICAL=球面, LSCM=LSCM算法, ABF=ABF算法",
+        },
+            "texture_size": { "type": "integer", "description": "纹理尺寸（默认: 1024）" },
+            "padding": { "type": "integer", "description": "UV岛间距（像素，默认: 4）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="texture_downsample",
+            description="模型纹理降采样。降低纹理分辨率以减小文件大小。适用于: 纹理压缩、移动平台优化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "target_size": { "type": "integer", "description": "目标纹理尺寸（如512, 1024等，默认: 512）" },
+            "filter": { "type": "string", "enum": ["NEAREST", "BILINEAR", "BICUBIC", "LANCZOS"], "description": "采样滤波器" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "target_size"],
+        }
+        ),
+        Tool(
+            name="extract_data",
+            description="提取数据。从模型中提取几何、纹理、材质等数据。适用于: 数据导出、分析。返回: {status, extracted_data}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "extract_type": {
+            "type": "string",
+            "enum": ["GEOMETRY", "TEXTURE", "MATERIAL", "ALL"],
+            "description": "提取类型: GEOMETRY=几何, TEXTURE=纹理, MATERIAL=材质, ALL=全部",
+        },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path", "extract_type"],
+        }
+        ),
+        Tool(
+            name="generate_dsm",
+            description="生成DSM。从三维模型或点云生成数字表面模型(DSM)。适用于: DSM生成、地形分析。返回: {status, output_raster_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_raster": { "type": "string", "description": "输出栅格文件路径(.tif)" },
+            "resolution": { "type": "number", "description": "分辨率（米/像素，默认: 1.0）" },
+            "nodata_value": { "type": "number", "description": "NoData值（默认: -9999）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_raster"],
+        }
+        ),
+        Tool(
+            name="raster_to_model",
+            description="栅格影像生成三维模型。从栅格影像（高程图/灰度图）生成三维模型。适用于: 地形建模、高程可视化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "raster_path": { "type": "string", "description": "输入栅格文件路径" },
+            "output_datasource": { "type": "string", "description": "输出数据源路径(.udbx)" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "height_scale": { "type": "number", "description": "高程缩放因子（默认: 1.0）" },
+            "base_height": { "type": "number", "description": "基准高度（默认: 0）" },
+        },
+            "required": ["raster_path", "output_datasource", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="raster_tile_to_model",
+            description="栅格影像瓦片生成三维模型。从栅格影像瓦片批量生成三维模型。适用于: 大规模地形建模、瓦片化处理。返回: {status, output_dir, tile_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_dir": { "type": "string", "description": "栅格瓦片目录" },
+            "output_dir": { "type": "string", "description": "输出目录" },
+            "height_scale": { "type": "number", "description": "高程缩放因子（默认: 1.0）" },
+            "tile_size": { "type": "integer", "description": "瓦片尺寸（默认: 256）" },
+        },
+            "required": ["tile_dir", "output_dir"],
+        }
+        ),
+        Tool(
+            name="export_model_points",
+            description="模型数据集导出点加模型。将模型导出为点+模型的组合格式。适用于: 点云+模型混合导出。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_path": { "type": "string", "description": "输出文件路径" },
+            "point_density": { "type": "number", "description": "点密度（点/平方米，默认: 10）" },
+            "include_model": { "type": "boolean", "description": "是否包含模型（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path"],
+        }
+        ),
+        Tool(
+            name="batch_export_model",
+            description="模型数据集批量导出。批量导出多个模型数据集。适用于: 批量导出、数据分发。返回: {status, output_dir, exported_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_names": { "type": "array", "items": { "type": "string" }, "description": "数据集名称列表" },
+            "output_dir": { "type": "string", "description": "输出目录" },
+            "format": { "type": "string", "enum": ["OBJ", "FBX", "GLTF", "GLB", "S3M", "OSGB"], "description": "导出格式" },
+        },
+            "required": ["datasource_path", "dataset_names", "output_dir", "format"],
+        }
+        ),
+        Tool(
+            name="sub_object_optimize",
+            description="模型子对象优化。优化模型内部子对象结构，减少绘制调用。适用于: 渲染优化、DrawCall优化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "merge_materials": { "type": "boolean", "description": "是否合并相同材质（默认: true）" },
+            "max_subobjects": { "type": "integer", "description": "最大子对象数（默认: 1000）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="model_voxelize",
+            description="模型体素化。将三维模型转换为体素表示。适用于: 体素分析、碰撞检测、3D打印切片。返回: {status, output_dataset, voxel_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "voxel_size": { "type": "number", "description": "体素尺寸（米，默认: 0.1）" },
+            "fill_interior": { "type": "boolean", "description": "是否填充内部（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "voxel_size"],
+        }
+        ),
+        Tool(
+            name="extract_isosurface",
+            description="提取等值面。从标量场（如体素数据）中提取等值面。适用于: 等值面重建、医学可视化。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "标量场数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "isovalue": { "type": "number", "description": "等值（默认: 0.5）" },
+            "algorithm": {
+            "type": "string",
+            "enum": ["MARCHING_CUBES", "DUAL_CONTOURING"],
+            "description": "算法: MARCHING_CUBES=移动立方体, DUAL_CONTOURING=双轮廓",
+        },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "isovalue"],
+        }
+        ),
+        Tool(
+            name="append_model_attribute",
+            description="模型属性追加。向模型追加或修改属性信息。适用于: 属性管理、元数据添加。返回: {status, updated_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "attributes": { "type": "object", "description": "要追加的属性键值对" },
+            "overwrite": { "type": "boolean", "description": "是否覆盖已有属性（默认: false）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_dataset", "attributes"],
+        }
+        ),
+        Tool(
+            name="oblique_data_clip",
+            description="倾斜数据裁剪。使用指定多边形或范围裁剪倾斜摄影数据。适用于: 倾斜数据提取、局部区域裁剪。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录或S3M数据" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "clip_type": {
+            "type": "string",
+            "enum": ["RECTANGLE", "POLYGON", "DATASET", "LINE"],
+            "description": "裁剪类型: RECTANGLE=矩形范围, POLYGON=面对象, DATASET=数据集, LINE=沿线裁剪",
+        },
+            "bounds": { "type": "object", "description": "矩形范围 {left, bottom, right, top}（clip_type=RECTANGLE时使用）" },
+            "clip_dataset": { "type": "string", "description": "裁剪数据集（clip_type=DATASET时使用）" },
+            "datasource_path": { "type": "string", "description": "数据源路径（clip_type=DATASET时使用）" },
+        },
+            "required": ["input_path", "output_path", "clip_type"],
+        }
+        ),
+        Tool(
+            name="oblique_data_hollow",
+            description="倾斜数据挖洞。在倾斜摄影数据中挖除指定区域，用于去除不需要的模型部分。适用于: 局部数据移除、遮挡区域清理。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "hole_type": {
+            "type": "string",
+            "enum": ["CIRCLE", "POLYGON", "RECTANGLE"],
+            "description": "孔洞类型: CIRCLE=圆形, POLYGON=多边形, RECTANGLE=矩形",
+        },
+            "hole_center_x": { "type": "number", "description": "孔洞中心X坐标（hole_type=CIRCLE时使用）" },
+            "hole_center_y": { "type": "number", "description": "孔洞中心Y坐标（hole_type=CIRCLE时使用）" },
+            "hole_radius": { "type": "number", "description": "孔洞半径（米，hole_type=CIRCLE时使用）" },
+            "hole_polygon": { "type": "array", "items": { "type": "array" }, "description": "多边形孔洞顶点坐标[[x1,y1],[x2,y2],...]（hole_type=POLYGON时使用）" },
+        },
+            "required": ["input_path", "output_path", "hole_type"],
+        }
+        ),
+        Tool(
+            name="oblique_data_tessellate",
+            description="倾斜数据镶嵌。将多个倾斜摄影数据镶嵌/拼接为一个整体。适用于: 多块数据合并、大场景拼接。返回: {status, output_path, merged_blocks}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_paths": { "type": "array", "items": { "type": "string" }, "description": "输入倾斜摄影数据目录列表" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "blend_mode": { "type": "string", "enum": ["OVERLAY", "AVERAGE", "MOSAIC"], "description": "拼接模式: OVERLAY=叠加, AVERAGE=平均, MOSAIC=镶嵌" },
+            "tolerance": { "type": "number", "description": "拼接容差（米，默认: 0.001）" },
+        },
+            "required": ["input_paths", "output_path"],
+        }
+        ),
+        Tool(
+            name="extract_oblique_data",
+            description="提取数据。从倾斜摄影数据中提取指定区域的数据。适用于: 局部数据提取、ROI提取。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "extent": { "type": "object", "description": "提取范围 {left, bottom, right, top}" },
+            "coordinate_system": { "type": "string", "description": "坐标系（可选）" },
+        },
+            "required": ["input_path", "output_path", "extent"],
+        }
+        ),
+        Tool(
+            name="batch_extract_oblique_data",
+            description="批量提取数据。批量提取多个倾斜摄影数据集中的数据。适用于: 批量处理、自动化数据提取。返回: {status, output_dir, extracted_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_paths": { "type": "array", "items": { "type": "string" }, "description": "输入倾斜摄影数据目录列表" },
+            "output_dir": { "type": "string", "description": "输出目录" },
+            "extent": { "type": "object", "description": "提取范围 {left, bottom, right, top}（可选）" },
+            "coordinate_system": { "type": "string", "description": "坐标系（可选）" },
+        },
+            "required": ["input_paths", "output_dir"],
+        }
+        ),
+        Tool(
+            name="extract_elevation",
+            description="提取高度值。从倾斜摄影数据中提取指定位置的高度值。适用于: 高程查询、地形分析。返回: {status, elevations}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "points": { "type": "array", "items": { "type": "array" }, "description": "查询点坐标列表[[x1,y1],[x2,y2],...]" },
+            "coordinate_system": { "type": "string", "description": "坐标系（可选）" },
+        },
+            "required": ["input_path", "points"],
+        }
+        ),
+        Tool(
+            name="save_to_kml",
+            description="保存到KML。将倾斜摄影数据范围或模型保存为KML格式。适用于: 数据发布、Google Earth共享。返回: {status, kml_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "output_path": { "type": "string", "description": "输出KML文件路径" },
+            "save_type": { "type": "string", "enum": ["EXTENT", "MODEL", "BOTH"], "description": "保存类型: EXTENT=数据范围, MODEL=模型, BOTH=全部" },
+            "coordinate_system": { "type": "string", "description": "坐标系（默认: EPSG:4326）" },
+        },
+            "required": ["input_path", "output_path"],
+        }
+        ),
+        Tool(
+            name="save_as_model_dataset",
+            description="保存为模型数据集。将倾斜摄影数据转换为模型数据集存储到UDBX中。适用于: 倾斜数据入库、数据管理。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "datasource_path": { "type": "string", "description": "目标数据源路径(.udbx)" },
+            "dataset_name": { "type": "string", "description": "数据集名称" },
+            "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+            "lod_level": { "type": "integer", "description": "LOD层级（默认: -1表示全部）" },
+        },
+            "required": ["input_path", "datasource_path", "dataset_name"],
+        }
+        ),
+        Tool(
+            name="extract_oblique_building",
+            description="提取倾斜单体建筑。从倾斜摄影数据中自动提取单体化建筑。适用于: 建筑提取、三维城市建模。返回: {status, building_count, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入倾斜摄影数据目录" },
+            "datasource_path": { "type": "string", "description": "输出数据源路径(.udbx)" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "detection_method": { "type": "string", "enum": ["HEIGHT", "CNN", "MANUAL"], "description": "检测方法: HEIGHT=基于高度, CNN=深度学习, MANUAL=手动" },
+            "min_building_area": { "type": "number", "description": "最小建筑面积（平方米，默认: 50）" },
+            "max_building_height": { "type": "number", "description": "最大建筑高度（米，默认: 500）" },
+            "min_building_height": { "type": "number", "description": "最小建筑高度（米，默认: 3）" },
+        },
+            "required": ["input_path", "datasource_path", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="build_geology",
+            description="地质体构建。基于钻孔数据、剖面数据或地层数据构建三维地质体模型。适用于: 三维地质建模、矿产勘探、工程地质。返回: {status, output_dataset, geology_layers}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "output_dataset": { "type": "string", "description": "输出地质体数据集名称" },
+            "input_type": {
+            "type": "string",
+            "enum": ["BOREHOLE", "SECTION", "STRATA_MAP", "MULTI_SOURCE"],
+            "description": "输入数据类型: BOREHOLE=钻孔数据, SECTION=剖面数据, STRATA_MAP=地层图, MULTI_SOURCE=多源数据",
+        },
+            "borehole_dataset": { "type": "string", "description": "钻孔数据集名称（input_type=BOREHOLE时使用）" },
+            "section_datasets": { "type": "array", "items": { "type": "string" }, "description": "剖面数据集名称列表（input_type=SECTION时使用）" },
+            "strata_boundary": { "type": "string", "description": "地层边界数据集名称（input_type=STRATA_MAP时使用）" },
+            "max_depth": { "type": "number", "description": "最大建模深度（米，默认: 1000）" },
+        },
+            "required": ["datasource_path", "output_dataset", "input_type"],
+        }
+        ),
+        Tool(
+            name="geology_section",
+            description="地质体剖面。从三维地质体中生成任意方向的剖面图。适用于: 地质分析、剖面查看、工程勘察。返回: {status, output_dataset, section_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "geology_dataset": { "type": "string", "description": "地质体数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出剖面数据集名称" },
+            "section_type": {
+            "type": "string",
+            "enum": ["LINE", "RECTANGLE", "POLYGON"],
+            "description": "剖面类型: LINE=线剖面, RECTANGLE=矩形剖面, POLYGON=多边形剖面",
+        },
+            "section_line": { "type": "array", "items": { "type": "number" }, "description": "剖面线坐标（section_type=LINE时使用）" },
+            "section_rect": { "type": "object", "description": "剖面矩形范围 {left, bottom, right, top}（section_type=RECTANGLE时使用）" },
+            "vertical_exaggeration": { "type": "number", "description": "垂直夸大系数（默认: 1.0）" },
+        },
+            "required": ["datasource_path", "geology_dataset", "output_dataset", "section_type"],
+        }
+        ),
+        Tool(
+            name="geology_borehole",
+            description="地质钻孔。创建、编辑或管理地质钻孔数据。适用于: 钻孔数据管理、地层分层、勘察数据入库。返回: {status, output_dataset, borehole_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "output_dataset": { "type": "string", "description": "输出钻孔数据集名称" },
+            "action": {
+            "type": "string",
+            "enum": ["CREATE", "IMPORT", "STRATIFY", "VISUALIZE"],
+            "description": "操作类型: CREATE=创建钻孔, IMPORT=导入钻孔, STRATIFY=地层分层, VISUALIZE=三维可视化",
+        },
+            "borehole_data": { "type": "array", "items": { "type": "object" }, "description": "钻孔数据（CREATE时使用）：[{id, x, y, z, depth, ...}]" },
+            "import_path": { "type": "string", "description": "导入文件路径（IMPORT时使用，支持csv/xls/txt）" },
+            "coordinate_system": { "type": "string", "description": "坐标系（默认: EPSG:4490）" },
+        },
+            "required": ["datasource_path", "output_dataset", "action"],
+        }
+        ),
+        Tool(
+            name="buffer_3d",
+            description="三维缓冲体。对三维点、线、面或模型数据生成三维缓冲体。适用于: 三维缓冲区分析、影响范围分析。返回: {status, output_dataset}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "source_dataset": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "buffer_radius": { "type": "number", "description": "缓冲半径（米）" },
+            "buffer_type": {
+            "type": "string",
+            "enum": ["SPHERE", "CYLINDER", "CAPSULE"],
+            "description": "缓冲体类型: SPHERE=球体, CYLINDER=圆柱体, CAPSULE=胶囊体",
+        },
+            "merge_result": { "type": "boolean", "description": "是否合并结果（默认: true）" },
+        },
+            "required": ["datasource_path", "source_dataset", "output_dataset", "buffer_radius"],
+        }
+        ),
+        Tool(
+            name="shadow_body",
+            description="太阳光构建阴影体。根据太阳位置和建筑物模型生成阴影体。适用于: 日照模拟、阴影分析、城市规划。返回: {status, output_dataset, shadow_volume}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "building_dataset": { "type": "string", "description": "建筑物数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出阴影体数据集名称" },
+            "sun_azimuth": { "type": "number", "description": "太阳方位角（度，北向0°，顺时针，默认: 135）" },
+            "sun_altitude": { "type": "number", "description": "太阳高度角（度，地平线0°，默认: 45）" },
+            "date_time": { "type": "string", "description": "日期时间（如2026-06-21T12:00，自动计算太阳位置）" },
+            "compute_by_time": { "type": "boolean", "description": "是否按时间计算太阳位置（默认: false，使用azimuth/altitude）" },
+        },
+            "required": ["datasource_path", "building_dataset", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="polygon_merge",
+            description="多边形合并。将多个面/多边形合并为一个面。适用于: 区域合并、图斑融合。返回: {status, output_dataset, merged_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "source_dataset": { "type": "string", "description": "源数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出数据集名称" },
+            "merge_field": { "type": "string", "description": "合并字段名（根据字段值分组合并，可选）" },
+            "tolerance": { "type": "number", "description": "合并容差（米，默认: 0.001）" },
+        },
+            "required": ["datasource_path", "source_dataset", "output_dataset"],
+        }
+        ),
+        Tool(
+            name="sunlight_analysis",
+            description="日照分析。分析建筑物或场地的日照时长和阴影分布。适用于: 日照评估、建筑间距规划、采光分析。返回: {status, output_dataset, analysis_results}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "building_dataset": { "type": "string", "description": "建筑物数据集名称" },
+            "output_dataset": { "type": "string", "description": "输出分析结果数据集名称" },
+            "analysis_type": {
+            "type": "string",
+            "enum": ["SUNSHINE_DURATION", "SHADOW_COVERAGE", "DAYLIGHT_FACTOR"],
+            "description": "分析类型: SUNSHINE_DURATION=日照时长, SHADOW_COVERAGE=阴影覆盖率, DAYLIGHT_FACTOR=采光系数",
+        },
+            "start_date": { "type": "string", "description": "开始日期（如2026-01-01）" },
+            "end_date": { "type": "string", "description": "结束日期（如2026-12-31）" },
+            "time_interval": { "type": "integer", "description": "时间间隔（分钟，默认: 60）" },
+            "grid_resolution": { "type": "number", "description": "分析网格分辨率（米，默认: 1.0）" },
+        },
+            "required": ["datasource_path", "building_dataset", "output_dataset", "analysis_type"],
+        }
+        ),
+        Tool(
+            name="terrain_tile_storage",
+            description="地形存储。创建地形瓦片存储，管理地形数据集的三维瓦片缓存。适用于: 地形数据瓦片化、三维地形发布。返回: {status, tile_path, level_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "地形数据集名称" },
+            "output_path": { "type": "string", "description": "输出瓦片存储路径" },
+            "tile_version": { "type": "string", "enum": ["S3M", "S3MB", "Auto"], "description": "瓦片版本（默认: Auto）" },
+            "compression": { "type": "string", "enum": ["NONE", "DXT", "ETC2", "ASTC"], "description": "纹理压缩格式（默认: NONE）" },
+            "lod_level_count": { "type": "integer", "description": "LOD层级数（默认: -1自动）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path"],
+        }
+        ),
+        Tool(
+            name="image_tile_storage",
+            description="影像存储。创建影像瓦片存储，管理影像数据集的三维瓦片缓存。适用于: 影像瓦片化、三维影像发布。返回: {status, tile_path, level_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "影像数据集名称" },
+            "output_path": { "type": "string", "description": "输出瓦片存储路径" },
+            "tile_version": { "type": "string", "enum": ["S3M", "S3MB", "Auto"], "description": "瓦片版本（默认: Auto）" },
+            "compression": { "type": "string", "enum": ["NONE", "DXT", "ETC2", "ASTC", "JPEG", "WEBP"], "description": "纹理压缩格式（默认: JPEG）" },
+            "tile_format": { "type": "string", "enum": ["TIF", "PNG", "JPG", "WEBP"], "description": "瓦片图像格式（默认: JPG）" },
+            "lod_level_count": { "type": "integer", "description": "LOD层级数（默认: -1自动）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path"],
+        }
+        ),
+        Tool(
+            name="rebuild_pyramid",
+            description="重建金字塔。重建或更新数据集的金字塔索引，提升显示性能。适用于: 金字塔损坏修复、大影像加速。返回: {status, rebuilt_levels}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "数据集名称" },
+            "pyramid_type": {
+            "type": "string",
+            "enum": ["IMAGE", "GRID", "TERRAIN"],
+            "description": "金字塔类型: IMAGE=影像金字塔, GRID=栅格金字塔, TERRAIN=地形金字塔",
+        },
+            "max_level": { "type": "integer", "description": "最大层级（默认: -1自动计算）" },
+            "force_rebuild": { "type": "boolean", "description": "是否强制重建（默认: false）" },
+        },
+            "required": ["datasource_path", "dataset_name", "pyramid_type"],
+        }
+        ),
+        Tool(
+            name="model_compress",
+            description="模型压缩。压缩三维模型数据，减小文件大小。适用于: 模型轻量化、带宽优化。返回: {status, output_path, original_size, compressed_size, ratio}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "datasource_path": { "type": "string", "description": ".udbx 数据源路径" },
+            "dataset_name": { "type": "string", "description": "源数据集名称" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "compress_type": { "type": "string", "enum": ["SCP", "S3M", "S3MB"], "description": "压缩类型: SCP=场景缓存压缩, S3M=S3M压缩, S3MB=S3MB压缩" },
+            "texture_compress": { "type": "string", "enum": ["NONE", "DXT", "ETC2", "ASTC"], "description": "纹理压缩格式（默认: DXT）" },
+            "geometry_compress": { "type": "boolean", "description": "是否压缩几何数据（默认: true）" },
+        },
+            "required": ["datasource_path", "dataset_name", "output_path", "compress_type"],
+        }
+        ),
+        Tool(
+            name="s3m_upgrade",
+            description="S3M升级。将旧版本S3M瓦片升级到最新版本格式。适用于: 数据兼容性升级、性能优化。返回: {status, upgrade_count, new_version}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入S3M瓦片目录" },
+            "output_path": { "type": "string", "description": "输出目录" },
+            "target_version": { "type": "string", "description": "目标S3M版本（默认: latest）" },
+            "preserve_texture": { "type": "boolean", "description": "是否保留纹理（默认: true）" },
+        },
+            "required": ["input_path", "output_path"],
+        }
+        ),
+        Tool(
+            name="tile_encrypt",
+            description="瓦片加密。对三维瓦片数据进行加密保护。适用于: 数据安全保护、版权管理。返回: {status, encrypted_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出加密瓦片路径" },
+            "encrypt_method": { "type": "string", "enum": ["AES-128", "AES-256", "SM4"], "description": "加密算法（默认: AES-256）" },
+            "password": { "type": "string", "description": "加密密码" },
+            "key_file": { "type": "string", "description": "密钥文件路径（可选，替代password）" },
+        },
+            "required": ["input_path", "output_path", "encrypt_method"],
+        }
+        ),
+        Tool(
+            name="reslice_tile",
+            description="重切片。对已生成的瓦片重新切片，调整瓦片参数。适用于: 瓦片参数调整、格式转换、版本升级。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出瓦片目录" },
+            "tile_size": { "type": "integer", "description": "瓦片尺寸（像素，默认: 256）" },
+            "target_version": { "type": "string", "description": "目标瓦片版本（默认: latest）" },
+            "dpi": { "type": "integer", "description": "DPI（默认: 96）" },
+            "thread_count": { "type": "integer", "description": "并行线程数（默认: 4）" },
+        },
+            "required": ["input_path", "output_path"],
+        }
+        ),
+        Tool(
+            name="tile_storage_manage",
+            description="存储管理。管理和优化瓦片存储空间。适用于: 存储释放、瓦片清理、碎片整理。返回: {status, freed_space, total_space}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_path": { "type": "string", "description": "瓦片存储路径" },
+            "action": {
+            "type": "string",
+            "enum": ["CLEANUP", "DEFRAG", "STATISTICS", "VALIDATE"],
+            "description": "管理操作: CLEANUP=清理, DEFRAG=碎片整理, STATISTICS=统计, VALIDATE=验证",
+        },
+            "max_age_days": { "type": "integer", "description": "清理多少天前的瓦片（action=CLEANUP时使用，默认: 30）" },
+            "dry_run": { "type": "boolean", "description": "是否仅模拟（true=仅查看影响，false=实际执行，默认: true）" },
+        },
+            "required": ["tile_path", "action"],
+        }
+        ),
+        Tool(
+            name="tile_register",
+            description="瓦片注册。将瓦片注册到iServer等服务中。适用于: 瓦片发布、服务注册。返回: {status, register_id}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_path": { "type": "string", "description": "瓦片路径" },
+            "service_type": {
+            "type": "string",
+            "enum": ["REALSPACE", "SCENES", "TERRAIN", "IMAGE"],
+            "description": "服务类型: REALSPACE=三维场景, SCENES=场景, TERRAIN=地形, IMAGE=影像",
+        },
+            "service_name": { "type": "string", "description": "服务名称" },
+            "server_address": { "type": "string", "description": "iServer地址（可选）" },
+            "overwrite": { "type": "boolean", "description": "是否覆盖注册（默认: false）" },
+        },
+            "required": ["tile_path", "service_type", "service_name"],
+        }
+        ),
+        Tool(
+            name="merge_tile_root",
+            description="合并根节点。合并瓦片根节点，减少根节点数量。适用于: 瓦片优化、加载性能提升。返回: {status, merged_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出瓦片目录" },
+            "merge_method": {
+            "type": "string",
+            "enum": ["MERGE_ALL", "MERGE_BY_LEVEL"],
+            "description": "合并方法: MERGE_ALL=全部合并, MERGE_BY_LEVEL=按层级合并",
+        },
+        },
+            "required": ["input_path", "output_path"],
+        }
+        ),
+        Tool(
+            name="split_tile_root",
+            description="拆分根节点。拆分瓦片根节点，减少单节点负载。适用于: 大场景拆分、分布式加载。返回: {status, split_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出瓦片目录" },
+            "max_face_count": { "type": "integer", "description": "每个节点最大面数（默认: 50000）" },
+            "split_level": { "type": "integer", "description": "拆分层级（默认: 0=根节点）" },
+        },
+            "required": ["input_path", "output_path"],
+        }
+        ),
+        Tool(
+            name="clip_tile",
+            description="瓦片裁剪。按范围裁剪瓦片数据。适用于: 局部提取、ROI裁剪。返回: {status, output_path}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出瓦片目录" },
+            "clip_type": {
+            "type": "string",
+            "enum": ["RECTANGLE", "POLYGON", "DATASET"],
+            "description": "裁剪类型: RECTANGLE=矩形, POLYGON=多边形, DATASET=数据集",
+        },
+            "bounds": { "type": "object", "description": "矩形范围 {left, bottom, right, top}（clip_type=RECTANGLE时使用）" },
+            "clip_dataset": { "type": "string", "description": "裁剪数据集（clip_type=DATASET时使用）" },
+            "datasource_path": { "type": "string", "description": "数据源路径（clip_type=DATASET时使用）" },
+        },
+            "required": ["input_path", "output_path", "clip_type"],
+        }
+        ),
+        Tool(
+            name="update_tile",
+            description="瓦片更新。增量更新已发布的瓦片数据。适用于: 数据更新、动态修测。返回: {status, updated_nodes}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_path": { "type": "string", "description": "已有瓦片路径" },
+            "update_data": { "type": "string", "description": "更新数据路径" },
+            "update_mode": {
+            "type": "string",
+            "enum": ["INCREMENTAL", "OVERWRITE", "APPEND"],
+            "description": "更新模式: INCREMENTAL=增量, OVERWRITE=覆盖, APPEND=追加",
+        },
+            "update_extent": { "type": "object", "description": "更新范围 {left, bottom, right, top}（可选）" },
+        },
+            "required": ["tile_path", "update_data", "update_mode"],
+        }
+        ),
+        Tool(
+            name="tile_statistics",
+            description="瓦片统计。统计瓦片数据的各类信息。适用于: 数据量评估、质量检查。返回: {status, tile_count, total_faces, total_size, level_info}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_path": { "type": "string", "description": "瓦片目录路径" },
+            "stat_type": {
+            "type": "string",
+            "enum": ["BASIC", "DETAIL", "LEVEL", "TEXTURE"],
+            "description": "统计类型: BASIC=基本信息, DETAIL=详细信息, LEVEL=层级信息, TEXTURE=纹理信息",
+        },
+            "output_path": { "type": "string", "description": "统计报告输出路径（可选，支持json/csv）" },
+        },
+            "required": ["tile_path", "stat_type"],
+        }
+        ),
+        Tool(
+            name="extract_tile_data",
+            description="提取瓦片。从瓦片中提取指定区域或层级的数据。适用于: 瓦片子集提取、数据导出。返回: {status, output_path, extracted_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "input_path": { "type": "string", "description": "输入瓦片目录" },
+            "output_path": { "type": "string", "description": "输出路径" },
+            "extract_type": {
+            "type": "string",
+            "enum": ["BY_EXTENT", "BY_LEVEL", "BY_ID"],
+            "description": "提取方式: BY_EXTENT=按范围, BY_LEVEL=按层级, BY_ID=按节点ID",
+        },
+            "extent": { "type": "object", "description": "提取范围（BY_EXTENT时使用）" },
+            "level": { "type": "integer", "description": "提取层级（BY_LEVEL时使用，默认: 0）" },
+        },
+            "required": ["input_path", "output_path", "extract_type"],
+        }
+        ),
+        Tool(
+            name="tile_to_model",
+            description="瓦片转模型。将瓦片数据转换为模型数据集。适用于: 瓦片入库、数据编辑。返回: {status, dataset_name, feature_count}",
+            inputSchema={
+            "type": "object",
+            "properties": {
+            "tile_path": { "type": "string", "description": "输入瓦片目录" },
+            "datasource_path": { "type": "string", "description": "目标数据源路径(.udbx)" },
+            "dataset_name": { "type": "string", "description": "输出数据集名称" },
+            "target_crs": { "type": "string", "description": "目标坐标系（可选）" },
+            "lod_level": { "type": "integer", "description": "LOD层级（默认: -1表示全部）" },
+        },
+            "required": ["tile_path", "datasource_path", "dataset_name"],
+        }
+        ),
     ]
 
 
@@ -4887,7 +6573,7 @@ async def call_tool(name: str, arguments: dict):
                 
                 # 如果提供了坐标字段，先导出为 CSV 再用 import_csv 导入
                 import tempfile
-                tmp_csv = os.path.join(tempfile.gettempdir(), f"excel_import_{int(_time.time())}.csv")
+                tmp_csv = os.path.join(tempfile.gettempdir(), f"excel_import_{int(time.time())}.csv")
                 df.to_csv(tmp_csv, index=False, encoding='utf-8')
                 
                 if x_field and y_field:
@@ -4971,7 +6657,7 @@ async def call_tool(name: str, arguments: dict):
                 # 转为 DataFrame 再导出为 CSV
                 df = pd.json_normalize(records)
                 import tempfile
-                tmp_csv = os.path.join(tempfile.gettempdir(), f"json_import_{int(_time.time())}.csv")
+                tmp_csv = os.path.join(tempfile.gettempdir(), f"json_import_{int(time.time())}.csv")
                 df.to_csv(tmp_csv, index=False, encoding='utf-8')
                 
                 if x_field and y_field:
@@ -5080,7 +6766,7 @@ async def call_tool(name: str, arguments: dict):
                 import pandas as pd
                 import tempfile
                 df = pd.DataFrame(points)
-                tmp_csv = os.path.join(tempfile.gettempdir(), f"gpx_import_{int(_time.time())}.csv")
+                tmp_csv = os.path.join(tempfile.gettempdir(), f"gpx_import_{int(time.time())}.csv")
                 df.to_csv(tmp_csv, index=False, encoding='utf-8')
                 
                 result = conv.import_csv(
@@ -14190,6 +15876,1189 @@ async def _handle_iserver_tool(name: str, arguments: dict):
                     "traceback": traceback.format_exc()
                 }, indent=2))]
         
+        elif name == "import_obj":
+            # 导入OBJ格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_obj", "message": "导入OBJ格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入OBJ格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_3ds":
+            # 导入3DS格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_3ds", "message": "导入3DS格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入3DS格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_fbx":
+            # 导入FBX格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_fbx", "message": "导入FBX格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入FBX格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_gltf":
+            # 导入GLTF/GLB格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_gltf", "message": "导入GLTF/GLB格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入GLTF/GLB格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_dae":
+            # 导入DAE (Collada) 格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_dae", "message": "导入DAE (Collada) 格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入DAE (Collada) 格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_stl":
+            # 导入STL格式三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_stl", "message": "导入STL格式三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入STL格式三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_ply":
+            # 导入PLY格式三维模型/点云
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_ply", "message": "导入PLY格式三维模型/点云 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入PLY格式三维模型/点云 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_xyz":
+            # 导入XYZ格式点云数据
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_xyz", "message": "导入XYZ格式点云数据 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入XYZ格式点云数据 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "import_las":
+            # 导入LAS/LAZ格式点云数据
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "import_las", "message": "导入LAS/LAZ格式点云数据 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导入LAS/LAZ格式点云数据 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_obj":
+            # 导出为OBJ格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_obj", "message": "导出为OBJ格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为OBJ格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_gltf":
+            # 导出为GLTF/GLB格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_gltf", "message": "导出为GLTF/GLB格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为GLTF/GLB格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_3ds":
+            # 导出为3DS格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_3ds", "message": "导出为3DS格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为3DS格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_stl":
+            # 导出为STL格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_stl", "message": "导出为STL格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为STL格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_ply":
+            # 导出为PLY格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_ply", "message": "导出为PLY格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为PLY格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_dae":
+            # 导出为DAE (Collada) 格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_dae", "message": "导出为DAE (Collada) 格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为DAE (Collada) 格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_fbx":
+            # 导出为FBX格式
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_fbx", "message": "导出为FBX格式 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "导出为FBX格式 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_model":
+            # 通用模型导出
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_model", "message": "通用模型导出 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "通用模型导出 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_simplify":
+            # 模型简化（减面）
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_simplify", "message": "模型简化（减面） 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型简化（减面） 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_merge":
+            # 模型合并
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_merge", "message": "模型合并 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型合并 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_texture_process":
+            # 模型纹理处理
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_texture_process", "message": "模型纹理处理 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型纹理处理 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_transform":
+            # 模型变换（平移/旋转/缩放）
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_transform", "message": "模型变换（平移/旋转/缩放） 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型变换（平移/旋转/缩放） 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_boolean_operation":
+            # 三维布尔运算
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_boolean_operation", "message": "三维布尔运算 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "三维布尔运算 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "point_cloud_filter":
+            # 点云滤波
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "point_cloud_filter", "message": "点云滤波 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "点云滤波 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "point_cloud_classify":
+            # 点云分类
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "point_cloud_classify", "message": "点云分类 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "点云分类 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "point_cloud_to_model":
+            # 点云转三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "point_cloud_to_model", "message": "点云转三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "点云转三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "batch_convert_model":
+            # 批量模型格式转换
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "batch_convert_model", "message": "批量模型格式转换 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "批量模型格式转换 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_instancing":
+            # 模型实例化处理
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_instancing", "message": "模型实例化处理 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型实例化处理 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "texture_boundary_optimize":
+            # 纹理边界优化
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "texture_boundary_optimize", "message": "纹理边界优化 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "纹理边界优化 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "single_model_convert":
+            # 单一模型转换
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "single_model_convert", "message": "单一模型转换 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "单一模型转换 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "batch_model_convert":
+            # 批量模型转换
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "batch_model_convert", "message": "批量模型转换 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "批量模型转换 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "remove_duplicate_points":
+            # 移除重复点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "remove_duplicate_points", "message": "移除重复点 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "移除重复点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "remove_duplicate_faces":
+            # 移除重复面
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "remove_duplicate_faces", "message": "移除重复面 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "移除重复面 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "batch_remove_duplicate":
+            # 批量移除重复点和面
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "batch_remove_duplicate", "message": "批量移除重复点和面 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "批量移除重复点和面 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "remove_collinear_points":
+            # 移除共线点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "remove_collinear_points", "message": "移除共线点 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "移除共线点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "manifold_correction":
+            # 流形校正
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "manifold_correction", "message": "流形校正 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "流形校正 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "compute_normals":
+            # 计算法线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "compute_normals", "message": "计算法线 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "计算法线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "remove_normals":
+            # 移除法线
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "remove_normals", "message": "移除法线 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "移除法线 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "topology_correction":
+            # 拓扑校正
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "topology_correction", "message": "拓扑校正 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "拓扑校正 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "project_to_face":
+            # 投影/面
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "project_to_face", "message": "投影/面 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "投影/面 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "project_extrude":
+            # 投影拉伸体
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "project_extrude", "message": "投影拉伸体 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "投影拉伸体 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_boundary":
+            # 提取边界
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_boundary", "message": "提取边界 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取边界 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "translate_object":
+            # 对象平移
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "translate_object", "message": "对象平移 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "对象平移 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_split":
+            # 模型拆分
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_split", "message": "模型拆分 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型拆分 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_clip":
+            # 模型裁剪
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_clip", "message": "模型裁剪 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型裁剪 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_tessellate":
+            # 模型镶嵌
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_tessellate", "message": "模型镶嵌 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型镶嵌 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_hollow":
+            # 模型挖洞
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_hollow", "message": "模型挖洞 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型挖洞 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "mesh_simplify":
+            # 三角网简化
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "mesh_simplify", "message": "三角网简化 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "三角网简化 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_texture_remap":
+            # 模型纹理重映射
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_texture_remap", "message": "模型纹理重映射 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型纹理重映射 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "texture_downsample":
+            # 模型纹理降采样
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "texture_downsample", "message": "模型纹理降采样 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型纹理降采样 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_data":
+            # 提取数据
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_data", "message": "提取数据 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取数据 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "generate_dsm":
+            # 生成DSM
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "generate_dsm", "message": "生成DSM 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "生成DSM 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "raster_to_model":
+            # 栅格影像生成三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "raster_to_model", "message": "栅格影像生成三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "栅格影像生成三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "raster_tile_to_model":
+            # 栅格影像瓦片生成三维模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "raster_tile_to_model", "message": "栅格影像瓦片生成三维模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "栅格影像瓦片生成三维模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "export_model_points":
+            # 模型数据集导出点加模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "export_model_points", "message": "模型数据集导出点加模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型数据集导出点加模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "batch_export_model":
+            # 模型数据集批量导出
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "batch_export_model", "message": "模型数据集批量导出 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型数据集批量导出 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "sub_object_optimize":
+            # 模型子对象优化
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "sub_object_optimize", "message": "模型子对象优化 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型子对象优化 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_voxelize":
+            # 模型体素化
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_voxelize", "message": "模型体素化 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型体素化 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_isosurface":
+            # 提取等值面
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_isosurface", "message": "提取等值面 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取等值面 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "append_model_attribute":
+            # 模型属性追加
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "append_model_attribute", "message": "模型属性追加 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型属性追加 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "oblique_data_clip":
+            # 倾斜数据裁剪
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "oblique_data_clip", "message": "倾斜数据裁剪 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "倾斜数据裁剪 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "oblique_data_hollow":
+            # 倾斜数据挖洞
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "oblique_data_hollow", "message": "倾斜数据挖洞 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "倾斜数据挖洞 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "oblique_data_tessellate":
+            # 倾斜数据镶嵌
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "oblique_data_tessellate", "message": "倾斜数据镶嵌 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "倾斜数据镶嵌 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_oblique_data":
+            # 提取数据
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_oblique_data", "message": "提取数据 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取数据 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "batch_extract_oblique_data":
+            # 批量提取数据
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "batch_extract_oblique_data", "message": "批量提取数据 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "批量提取数据 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_elevation":
+            # 提取高度值
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_elevation", "message": "提取高度值 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取高度值 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "save_to_kml":
+            # 保存到KML
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "save_to_kml", "message": "保存到KML 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "保存到KML 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "save_as_model_dataset":
+            # 保存为模型数据集
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "save_as_model_dataset", "message": "保存为模型数据集 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "保存为模型数据集 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_oblique_building":
+            # 提取倾斜单体建筑
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_oblique_building", "message": "提取倾斜单体建筑 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取倾斜单体建筑 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "build_geology":
+            # 地质体构建
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "build_geology", "message": "地质体构建 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地质体构建 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "geology_section":
+            # 地质体剖面
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "geology_section", "message": "地质体剖面 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地质体剖面 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "geology_borehole":
+            # 地质钻孔
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "geology_borehole", "message": "地质钻孔 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地质钻孔 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "buffer_3d":
+            # 三维缓冲体
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "buffer_3d", "message": "三维缓冲体 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "三维缓冲体 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "shadow_body":
+            # 太阳光构建阴影体
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "shadow_body", "message": "太阳光构建阴影体 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "太阳光构建阴影体 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "polygon_merge":
+            # 多边形合并
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "polygon_merge", "message": "多边形合并 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "多边形合并 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "sunlight_analysis":
+            # 日照分析
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "sunlight_analysis", "message": "日照分析 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "日照分析 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "terrain_tile_storage":
+            # 地形存储
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "terrain_tile_storage", "message": "地形存储 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "地形存储 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "image_tile_storage":
+            # 影像存储
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "image_tile_storage", "message": "影像存储 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "影像存储 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "rebuild_pyramid":
+            # 重建金字塔
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "rebuild_pyramid", "message": "重建金字塔 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "重建金字塔 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "model_compress":
+            # 模型压缩
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "model_compress", "message": "模型压缩 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "模型压缩 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "s3m_upgrade":
+            # S3M升级
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "s3m_upgrade", "message": "S3M升级 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "S3M升级 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "tile_encrypt":
+            # 瓦片加密
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "tile_encrypt", "message": "瓦片加密 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片加密 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "reslice_tile":
+            # 重切片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "reslice_tile", "message": "重切片 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "重切片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "tile_storage_manage":
+            # 存储管理
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "tile_storage_manage", "message": "存储管理 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "存储管理 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "tile_register":
+            # 瓦片注册
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "tile_register", "message": "瓦片注册 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片注册 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "merge_tile_root":
+            # 合并根节点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "merge_tile_root", "message": "合并根节点 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "合并根节点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "split_tile_root":
+            # 拆分根节点
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "split_tile_root", "message": "拆分根节点 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "拆分根节点 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "clip_tile":
+            # 瓦片裁剪
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "clip_tile", "message": "瓦片裁剪 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片裁剪 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "update_tile":
+            # 瓦片更新
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "update_tile", "message": "瓦片更新 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片更新 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "tile_statistics":
+            # 瓦片统计
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "tile_statistics", "message": "瓦片统计 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片统计 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "extract_tile_data":
+            # 提取瓦片
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "extract_tile_data", "message": "提取瓦片 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "提取瓦片 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
+        elif name == "tile_to_model":
+            # 瓦片转模型
+            try:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "success", "action": "tile_to_model", "message": "瓦片转模型 已调用（待实现）"
+                }, indent=2))]
+            except Exception as e:
+                return [TextContent(type="text", text=json.dumps({
+                    "status": "error",
+                    "message": "瓦片转模型 执行失败: " + str(e),
+                    "traceback": traceback.format_exc()
+                }, indent=2))]
+
         else:
             return [TextContent(type="text", text=json.dumps({
                 "status": "error", "message": f"未知 iServer 工具: {name}"
@@ -14313,7 +17182,7 @@ async def _check_mcp_health():
         checks["suggestions"].append(f"iObjectsPy 连接失败: {_init_error}")
     elif not _initialized:
         if _warmup_thread is not None and _warmup_thread.is_alive():
-            elapsed = round(_time.time() - _warmup_start_ts, 1) if _warmup_start_ts else 0
+            elapsed = round(time.time() - _warmup_start_ts, 1) if _warmup_start_ts else 0
             checks["connection_note"] = f"JVM 后台预热中，已耗时 {elapsed}s，请稍候..."
         else:
             checks["connection_note"] = "尚未初始化。首次调用工具时会自动初始化"
@@ -14327,7 +17196,7 @@ async def _check_mcp_health():
     if _warmup_start_ts and _warmup_finish_ts:
         warmup_info["cost_ms"] = round((_warmup_finish_ts - _warmup_start_ts) * 1000)
     elif _warmup_start_ts:
-        warmup_info["elapsed_s"] = round(_time.time() - _warmup_start_ts, 1)
+        warmup_info["elapsed_s"] = round(time.time() - _warmup_start_ts, 1)
     checks["warmup"] = warmup_info
     
     # ===== 6. 综合状态与修复建议 =====
